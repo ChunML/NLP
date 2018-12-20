@@ -123,14 +123,20 @@ n_vocab = len(int_to_vocab)
 n_embedding = 300
 n_sampled = 100
 
-train_graph = tf.Graph()
-with train_graph.as_default():
-    inputs = tf.placeholder(tf.int32, [None])
-    labels = tf.placeholder(tf.int32, [None, None])
+# train_graph = tf.Graph()
+# with train_graph.as_default():
 
+inputs = tf.placeholder(tf.int32, [None])
+labels = tf.placeholder(tf.int32, [None, None])
+
+def get_embed(inputs):
     embedding = tf.Variable(tf.random_uniform([n_vocab, n_embedding], -1, 1))
     embed = tf.nn.embedding_lookup(embedding, inputs)
+    return embedding, embed
 
+embedding, embed = get_embed(inputs)
+
+def get_loss_and_training_op(labels, embed):
     weights = tf.Variable(tf.truncated_normal([n_vocab, n_embedding], stddev=0.1))
     biases = tf.Variable(tf.zeros(n_vocab))
     # logits = tf.layers.dense(embed, n_vocab)
@@ -143,24 +149,24 @@ with train_graph.as_default():
                                       num_classes=n_vocab)
     cost = tf.reduce_mean(loss)
     optimizer = tf.train.AdamOptimizer().minimize(cost)
+    return cost, optimizer
+
+cost, optimizer = get_loss_and_training_op(labels, embed)
 
 # Below is some code to validate the training process.
 # We choose some common words and uncommon words.
 # Then we print out closest words to them
 # to check if embedding layer is learning well
-with train_graph.as_default():
-    valid_size = 16
-    valid_window = 100
+# with train_graph.as_default():
+valid_size = 16
+valid_window = 100
+def inference(examples, embedding):
     # Since words in int_to_vocab is sorted by frequency,
     # lower index means that word appears more often.
     # Here we peek 4 elements between (1, 100)
     # and 4 elements between (1000, 1100)
-    valid_examples = np.array(random.sample(range(valid_window), valid_size // 2))
-    valid_examples = np.append(valid_examples,
-                               random.sample(range(1000, 1000 + valid_window),
-                                             valid_size // 2))
 
-    valid_dataset = tf.constant(valid_examples, dtype=tf.int32)
+    valid_dataset = tf.constant(examples, dtype=tf.int32)
 
     # Calculate cosine distance
     norm = tf.sqrt(tf.reduce_sum(tf.square(embedding), 1, keepdims=True))
@@ -177,6 +183,33 @@ with train_graph.as_default():
     # If the embedding layer learned well, the two matrix should be similar
     similarity = tf.matmul(valid_embedding,
                            tf.transpose(normalized_embedding))
+    return similarity
+
+valid_examples = np.array(random.sample(range(valid_window), valid_size // 2))
+valid_examples = np.append(valid_examples,
+                           random.sample(range(1000, 1000 + valid_window),
+                                         valid_size // 2))
+
+similarity = inference(valid_examples, embedding)
+
+test_word = 'rose'
+test_word_int = np.array([vocab_to_int[test_word]])
+synonym = inference(test_word_int, embedding)
+
+def print_inference_result(input_words, output_words, top_k=8):
+    for i in range(len(output_words)):
+        valid_word = int_to_vocab[input_words[i]]
+
+        # sim is a matrix with shape [valid_size, n_vocab]
+        # We loop through it and take top_k values along second dimensions
+        # TODO: do some readings to find out why we need the minus
+        nearest = (-output_words[i, :]).argsort()[1:top_k + 1]
+        log = 'Nearest to {}:'.format(valid_word)
+        for k in range(top_k):
+            close_word = int_to_vocab[nearest[k]]
+            log = '{} {},'.format(log, close_word)
+        print(log)
+    print()
 
 # Train the network with setting like below
 epochs = 10
@@ -187,7 +220,7 @@ checkpoint_dir = 'checkpoint'
 if not os.path.exists(checkpoint_dir):
     os.mkdir(checkpoint_dir)
 
-with tf.Session(graph=train_graph) as sess:
+with tf.Session() as sess:
     saver = tf.train.Saver()
     iteration = 1
     loss = 0
@@ -214,21 +247,10 @@ with tf.Session(graph=train_graph) as sess:
             
             if iteration % 1000 == 0:
                 sim = similarity.eval()
-                for i in range(valid_size):
-                    valid_word = int_to_vocab[valid_examples[i]]
+                print_inference_result(valid_examples, sim)
 
-                    # We will get 8 nearest neighbors
-                    top_k = 8
-
-                    # sim is a matrix with shape [valid_size, n_vocab]
-                    # We loop through it and take top_k values along second dimensions
-                    # TODO: do some readings to find out why we need the minus
-                    nearest = (-sim[i, :]).argsort()[1:top_k + 1]
-                    log = 'Nearest to {}:'.format(valid_word)
-                    for k in range(top_k):
-                        close_word = int_to_vocab[nearest[k]]
-                        log = '{} {},'.format(log, close_word)
-                    print(log)
+                sym = synonym.eval()
+                print_inference_result(test_word_int, sym)
 
             iteration += 1
 
