@@ -70,7 +70,7 @@ with open('data/text8') as f:
     text = f.read()
 
 ###########################################################
-# ------------------- Preprocessing ------------------------
+# ------------------- Preprocessing -----------------------
 # 1. Tokenize punctuations e.g. period -> <PERIOD>
 # 2. Remove words that show up five times or fewer
 words = utils.preprocess(text)
@@ -87,7 +87,7 @@ vocab_to_int, int_to_vocab = utils.create_lookup_tables(words)
 int_words = [vocab_to_int[w] for w in words]
 
 ###########################################################
-# ------------------- Subsampling --------------------------
+# ------------------- Subsampling -------------------------
 # Some words like "the", "a", "of" etc don't provide much
 # information. So we might want to remove some of them.
 # This results in faster and better result.
@@ -107,7 +107,7 @@ print('After subsampling, first 30 words:', train_words[:30])
 print('After subsampling, total words:', len(train_words))
 
 ###########################################################
-# ------------------- Making Batch -------------------------
+# ------------------- Making Batch ------------------------
 # For the skip-gram model to work, for each word in the text
 # we must grab words in a window around that word, size C
 # Ex: if C = 5, then we choose a R randomly in [1, C]
@@ -154,7 +154,7 @@ def get_dataset(words, batch_size, window_size=5):
 
 
 ###########################################################
-# ------------------- Build Graph --------------------------
+# ------------------- Build Graph -------------------------
 # Input to network will be an array of length batch_size
 # To make things work, labels must have second dimensions set to None or 1
 # Embedding layer will map input of [batch_size, n_vocab] to [batch_size, hidden_size]
@@ -167,7 +167,8 @@ n_vocab = len(int_to_vocab)
 
 
 def get_embed(inputs):
-    embedding = tf.Variable(tf.random_uniform([n_vocab, FLAGS.embedding_size], -1, 1))
+    embedding = tf.Variable(tf.random_uniform(
+        [n_vocab, FLAGS.embedding_size], -1, 1))
     embed = tf.nn.embedding_lookup(embedding, inputs)
     return embedding, embed
 
@@ -222,7 +223,8 @@ def inference(examples, embedding):
     return similarity
 
 
-valid_examples = np.array(random.sample(range(FLAGS.valid_window), FLAGS.valid_size // 2))
+valid_examples = np.array(random.sample(
+    range(FLAGS.valid_window), FLAGS.valid_size // 2))
 valid_examples = np.append(valid_examples,
                            random.sample(range(1000, 1000 + FLAGS.valid_window),
                                          FLAGS.valid_size // 2))
@@ -235,8 +237,7 @@ def print_inference_result(input_words, output_words, top_k=8):
 
         # sim is a matrix with shape [valid_size, n_vocab]
         # We loop through it and take top_k values along second dimensions
-        # TODO: do some readings to find out why we need the minus
-        nearest = (-output_words[i, :]).argsort()[1:top_k + 1]
+        nearest = output_words[i, :].argsort()[-top_k - 1:][:-1]
         log = 'Nearest to {}:'.format(valid_word)
         for k in range(top_k):
             close_word = int_to_vocab[nearest[k]]
@@ -266,8 +267,8 @@ with tf.Session() as sess:
     loss = 0
     sess.run(tf.global_variables_initializer())
 
+    start = time.time()
     for i in range(1, num_iter + 1):
-        start = time.time()
 
         train_loss, _ = sess.run([cost, optimizer])
         loss += train_loss
