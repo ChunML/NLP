@@ -26,8 +26,8 @@ flags.DEFINE_integer('valid_window', 100,
 flags.DEFINE_string('test_word', 'japan',
                     'Specific word of user choice to perform inference.')
 
-flags.DEFINE_integer('epochs', 10,
-                     'Number of training epochs.')
+flags.DEFINE_integer('num_iterations', 50000,
+                     'Number of training iterations.')
 flags.DEFINE_integer('batch_size', 1000,
                      'Batch size used when training.')
 flags.DEFINE_integer('window_size', 10,
@@ -45,6 +45,7 @@ dataset_folder_path = 'data'
 dataset_filename = 'text8.zip'
 dataset_name = 'Text8 Dataset'
 
+
 class DLProgress(tqdm):
     last_block = 0
 
@@ -52,6 +53,7 @@ class DLProgress(tqdm):
         self.total = total_size
         self.update((block_num - self.last_block) * block_size)
         self.last_block = block_num
+
 
 if not isfile(dataset_filename):
     with DLProgress(unit='B', unit_scale=True, miniters=1, desc=dataset_name) as pbar:
@@ -68,7 +70,7 @@ with open('data/text8') as f:
     text = f.read()
 
 ###########################################################
-#------------------- Preprocessing ------------------------
+# ------------------- Preprocessing ------------------------
 # 1. Tokenize punctuations e.g. period -> <PERIOD>
 # 2. Remove words that show up five times or fewer
 words = utils.preprocess(text)
@@ -85,7 +87,7 @@ vocab_to_int, int_to_vocab = utils.create_lookup_tables(words)
 int_words = [vocab_to_int[w] for w in words]
 
 ###########################################################
-#------------------- Subsampling --------------------------
+# ------------------- Subsampling --------------------------
 # Some words like "the", "a", "of" etc don't provide much
 # information. So we might want to remove some of them.
 # This results in faster and better result.
@@ -98,18 +100,21 @@ threshold = FLAGS.drop_word_threshold
 freqs = {word: count/total_count for word, count in each_word_count.items()}
 probs = {word: 1 - np.sqrt(threshold/freqs[word]) for word in each_word_count}
 
-train_words = [word for word in int_words if random.random() < (1 - probs[word])]
+train_words = [word for word in int_words if random.random() <
+               (1 - probs[word])]
 
 print('After subsampling, first 30 words:', train_words[:30])
 print('After subsampling, total words:', len(train_words))
 
 ###########################################################
-#------------------- Making Batch -------------------------
+# ------------------- Making Batch -------------------------
 # For the skip-gram model to work, for each word in the text
 # we must grab words in a window around that word, size C
 # Ex: if C = 5, then we choose a R randomly in [1, C]
 # then pickup R words before and after current word
 # to use as training labels
+
+
 def get_target(words, idx, window_size=5):
     random_window = random.randint(1, window_size)
     target_words = []
@@ -119,28 +124,37 @@ def get_target(words, idx, window_size=5):
         if i == idx:
             continue
         target_words.append(words[i])
-    return target_words
+    return [words[idx]] * len(target_words), target_words
 
 # Then we define a function to create batches for the data
 # Each bactch contains batch_size words, and we use get_target
 # above to get the target words for each
 # Use generator to make it efficient
-def get_batches(words, batch_size, window_size=5):
+
+
+def get_dataset(words, batch_size, window_size=5):
+    def _parse_data(batch):
+        x, y = [], []
+        for i in range(len(batch)):
+            batch_x, batch_y = get_target(batch, i, window_size)
+            y.extend(batch_y)
+            x.extend(batch_x)
+        return x, y
+
     n_batches = int(len(words) / batch_size)
     words = words[:n_batches * batch_size]
+    words = np.reshape(words, [-1, batch_size])
+    dataset = tf.data.Dataset.from_tensor_slices(words)
+    dataset = dataset.map(lambda batch: tuple(
+        tf.py_func(_parse_data, [batch], [tf.int64, tf.int64])))
+    dataset = dataset.repeat()
 
-    for i in range(0, len(words), batch_size):
-        x, y = [], []
-        batch = words[i: i + batch_size]
-        for ii in range(len(batch)):
-            batch_x = batch[ii]
-            batch_y = get_target(batch, ii, window_size)
-            y.extend(batch_y)
-            x.extend([batch_x] * len(batch_y))
-        yield x, y
+    iterator = dataset.make_one_shot_iterator()
+    return iterator.get_next()
+
 
 ###########################################################
-#------------------- Build Graph --------------------------
+# ------------------- Build Graph --------------------------
 # Input to network will be an array of length batch_size
 # To make things work, labels must have second dimensions set to None or 1
 # Embedding layer will map input of [batch_size, n_vocab] to [batch_size, hidden_size]
@@ -150,46 +164,37 @@ def get_batches(words, batch_size, window_size=5):
 # to compute the loss, and update the network.
 # This is called Negative Sampling.
 n_vocab = len(int_to_vocab)
-n_embedding = FLAGS.embedding_size
-n_sampled = FLAGS.n_sampled
 
-# train_graph = tf.Graph()
-# with train_graph.as_default():
-
-inputs = tf.placeholder(tf.int32, [None])
-labels = tf.placeholder(tf.int32, [None, None])
 
 def get_embed(inputs):
-    embedding = tf.Variable(tf.random_uniform([n_vocab, n_embedding], -1, 1))
+    embedding = tf.Variable(tf.random_uniform([n_vocab, FLAGS.embedding_size], -1, 1))
     embed = tf.nn.embedding_lookup(embedding, inputs)
     return embedding, embed
 
-embedding, embed = get_embed(inputs)
 
 def get_loss_and_training_op(labels, embed):
-    weights = tf.Variable(tf.truncated_normal([n_vocab, n_embedding], stddev=0.1))
+    weights = tf.Variable(tf.truncated_normal(
+        [n_vocab, FLAGS.embedding_size], stddev=0.1))
     biases = tf.Variable(tf.zeros(n_vocab))
-    # logits = tf.layers.dense(embed, n_vocab)
 
     loss = tf.nn.sampled_softmax_loss(weights=weights,
                                       biases=biases,
                                       labels=labels,
                                       inputs=embed,
-                                      num_sampled=n_sampled,
+                                      num_sampled=FLAGS.n_sampled,
                                       num_classes=n_vocab)
     cost = tf.reduce_mean(loss)
     optimizer = tf.train.AdamOptimizer().minimize(cost)
     return cost, optimizer
 
-cost, optimizer = get_loss_and_training_op(labels, embed)
 
 # Below is some code to validate the training process.
 # We choose some common words and uncommon words.
 # Then we print out closest words to them
 # to check if embedding layer is learning well
 # with train_graph.as_default():
-valid_size = FLAGS.valid_size
-valid_window = FLAGS.valid_window
+
+
 def inference(examples, embedding):
     # Since words in int_to_vocab is sorted by frequency,
     # lower index means that word appears more often.
@@ -203,7 +208,8 @@ def inference(examples, embedding):
 
     # Okay, we normalize the embedding weights by dividing it by norm
     normalized_embedding = embedding / norm
-    valid_embedding = tf.nn.embedding_lookup(normalized_embedding, valid_dataset)
+    valid_embedding = tf.nn.embedding_lookup(
+        normalized_embedding, valid_dataset)
 
     # Let's see some magic here:
     # input (N, vocab_size) * embedding (vocab_size, hidden_size) => embed (N, hidden_size)
@@ -215,16 +221,13 @@ def inference(examples, embedding):
                            tf.transpose(normalized_embedding))
     return similarity
 
-valid_examples = np.array(random.sample(range(valid_window), valid_size // 2))
+
+valid_examples = np.array(random.sample(range(FLAGS.valid_window), FLAGS.valid_size // 2))
 valid_examples = np.append(valid_examples,
-                           random.sample(range(1000, 1000 + valid_window),
-                                         valid_size // 2))
+                           random.sample(range(1000, 1000 + FLAGS.valid_window),
+                                         FLAGS.valid_size // 2))
+test_word_int = np.array([vocab_to_int[FLAGS.test_word]])
 
-similarity = inference(valid_examples, embedding)
-
-test_word = FLAGS.test_word
-test_word_int = np.array([vocab_to_int[test_word]])
-synonym = inference(test_word_int, embedding)
 
 def print_inference_result(input_words, output_words, top_k=8):
     for i in range(len(output_words)):
@@ -241,8 +244,9 @@ def print_inference_result(input_words, output_words, top_k=8):
         print(log)
     print()
 
+
 # Train the network with setting like below
-epochs = FLAGS.epochs
+num_iter = FLAGS.num_iterations
 batch_size = FLAGS.batch_size
 window_size = FLAGS.window_size
 
@@ -250,39 +254,37 @@ checkpoint_dir = FLAGS.checkpoint_dir
 if not os.path.exists(checkpoint_dir):
     os.mkdir(checkpoint_dir)
 
+inputs, labels = get_dataset(train_words, FLAGS.batch_size, FLAGS.window_size)
+labels = tf.expand_dims(labels, axis=-1)
+embedding, embed = get_embed(inputs)
+cost, optimizer = get_loss_and_training_op(labels, embed)
+similarity = inference(valid_examples, embedding)
+synonym = inference(test_word_int, embedding)
+
 with tf.Session() as sess:
     saver = tf.train.Saver()
-    iteration = 1
     loss = 0
     sess.run(tf.global_variables_initializer())
 
-    for e in range(epochs):
-        batches = get_batches(train_words, batch_size, window_size)
+    for i in range(1, num_iter + 1):
         start = time.time()
-        for x, y in batches:
-            feed = {inputs: x,
-                    labels: np.array(y)[:, None]}
-            train_loss, _ = sess.run([cost, optimizer],
-                                     feed_dict=feed)
-            loss += train_loss
 
-            if iteration % FLAGS.print_every == 0:
-                end = time.time()
-                print('Epoch {}/{}'.format(e, epochs),
-                      'Iteration {}'.format(iteration),
-                      'Avg Training loss: {:.4f}'.format(loss / 100),
-                      '{:.4f} sec/batch'.format((end - start) / 100))
-                loss = 0
-                start = time.time()
-            
-            if iteration % FLAGS.infer_every == 0:
-                sim = similarity.eval()
-                print_inference_result(valid_examples, sim)
+        train_loss, _ = sess.run([cost, optimizer])
+        loss += train_loss
+        if i % FLAGS.print_every == 0:
+            end = time.time()
+            print('Iteration {}/{}'.format(i, num_iter),
+                  'Avg Training loss: {:.4f}'.format(loss / 100),
+                  '{:.4f} sec/batch'.format(end - start))
+            loss = 0
+            start = time.time()
 
-                sym = synonym.eval()
-                print_inference_result(test_word_int, sym)
+        if i % FLAGS.infer_every == 0:
+            sim = similarity.eval()
+            print_inference_result(valid_examples, sim)
 
-            iteration += 1
+            sym = synonym.eval()
+            print_inference_result(test_word_int, sym)
 
     checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
     saver.save(sess, checkpoint_path)
