@@ -11,6 +11,36 @@ import random
 from collections import Counter
 import os
 
+flags = tf.app.flags
+
+flags.DEFINE_float('drop_word_threshold', 1e-5,
+                   'Threshold to compute probability to drop words in sequence.')
+flags.DEFINE_integer('embedding_size', 300,
+                     'Embedding layer\' hidden size.')
+flags.DEFINE_integer('n_sampled', 100,
+                     'Number of negative samples to compute loss.')
+flags.DEFINE_integer('valid_size', 16,
+                     'Number of words to perform inference.')
+flags.DEFINE_integer('valid_window', 100,
+                     'Number of words to randomly get sample from.')
+flags.DEFINE_string('test_word', 'japan',
+                    'Specific word of user choice to perform inference.')
+
+flags.DEFINE_integer('epochs', 10,
+                     'Number of training epochs.')
+flags.DEFINE_integer('batch_size', 1000,
+                     'Batch size used when training.')
+flags.DEFINE_integer('window_size', 10,
+                     'Window size to compute skip-gram targets.')
+flags.DEFINE_string('checkpoint_dir', 'checkpoint',
+                    'Checkpoint directory.')
+flags.DEFINE_integer('print_every', 100,
+                     'Print loss every ... iterations.')
+flags.DEFINE_integer('infer_every', 1000,
+                     'Infer every ... iteration.')
+
+FLAGS = flags.FLAGS
+
 dataset_folder_path = 'data'
 dataset_filename = 'text8.zip'
 dataset_name = 'Text8 Dataset'
@@ -63,7 +93,7 @@ int_words = [vocab_to_int[w] for w in words]
 # P(w) = 1 - sqrt(1 / frequency(w))
 each_word_count = Counter(int_words)
 total_count = len(int_words)
-threshold = 1e-5
+threshold = FLAGS.drop_word_threshold
 
 freqs = {word: count/total_count for word, count in each_word_count.items()}
 probs = {word: 1 - np.sqrt(threshold/freqs[word]) for word in each_word_count}
@@ -120,8 +150,8 @@ def get_batches(words, batch_size, window_size=5):
 # to compute the loss, and update the network.
 # This is called Negative Sampling.
 n_vocab = len(int_to_vocab)
-n_embedding = 300
-n_sampled = 100
+n_embedding = FLAGS.embedding_size
+n_sampled = FLAGS.n_sampled
 
 # train_graph = tf.Graph()
 # with train_graph.as_default():
@@ -158,8 +188,8 @@ cost, optimizer = get_loss_and_training_op(labels, embed)
 # Then we print out closest words to them
 # to check if embedding layer is learning well
 # with train_graph.as_default():
-valid_size = 16
-valid_window = 100
+valid_size = FLAGS.valid_size
+valid_window = FLAGS.valid_window
 def inference(examples, embedding):
     # Since words in int_to_vocab is sorted by frequency,
     # lower index means that word appears more often.
@@ -192,7 +222,7 @@ valid_examples = np.append(valid_examples,
 
 similarity = inference(valid_examples, embedding)
 
-test_word = 'rose'
+test_word = FLAGS.test_word
 test_word_int = np.array([vocab_to_int[test_word]])
 synonym = inference(test_word_int, embedding)
 
@@ -212,11 +242,11 @@ def print_inference_result(input_words, output_words, top_k=8):
     print()
 
 # Train the network with setting like below
-epochs = 10
-batch_size = 1000
-window_size = 10
+epochs = FLAGS.epochs
+batch_size = FLAGS.batch_size
+window_size = FLAGS.window_size
 
-checkpoint_dir = 'checkpoint'
+checkpoint_dir = FLAGS.checkpoint_dir
 if not os.path.exists(checkpoint_dir):
     os.mkdir(checkpoint_dir)
 
@@ -236,7 +266,7 @@ with tf.Session() as sess:
                                      feed_dict=feed)
             loss += train_loss
 
-            if iteration % 100 == 0:
+            if iteration % FLAGS.print_every == 0:
                 end = time.time()
                 print('Epoch {}/{}'.format(e, epochs),
                       'Iteration {}'.format(iteration),
@@ -245,7 +275,7 @@ with tf.Session() as sess:
                 loss = 0
                 start = time.time()
             
-            if iteration % 1000 == 0:
+            if iteration % FLAGS.infer_every == 0:
                 sim = similarity.eval()
                 print_inference_result(valid_examples, sim)
 
@@ -255,4 +285,4 @@ with tf.Session() as sess:
             iteration += 1
 
     checkpoint_path = os.path.join(checkpoint_dir, 'model.ckpt')
-    saver.save(sess, 'model.ckpt')
+    saver.save(sess, checkpoint_path)
