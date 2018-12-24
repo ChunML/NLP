@@ -15,17 +15,17 @@ def get_embed(n_vocab, inputs):
 
 def get_loss_and_training_op(n_vocab, labels, embed):
     embed.set_shape([None, FLAGS.embedding_size])
-    dense = tf.layers.dense(
-        embed, FLAGS.hidden_size,
-        kernel_initializer=tf.initializers.truncated_normal(stddev=0.1))
+    #dense = tf.layers.dense(
+    #    embed, FLAGS.hidden_size,
+    #    kernel_initializer=tf.initializers.truncated_normal(stddev=0.1))
     weights = tf.Variable(tf.truncated_normal(
-        [n_vocab, FLAGS.hidden_size], stddev=0.1))
+        [n_vocab, FLAGS.embedding_size], stddev=0.1))
     biases = tf.Variable(tf.zeros(n_vocab))
 
     loss = tf.nn.sampled_softmax_loss(weights=weights,
                                       biases=biases,
                                       labels=labels,
-                                      inputs=dense,
+                                      inputs=embed,
                                       num_sampled=FLAGS.n_sampled,
                                       num_classes=n_vocab)
     cost = tf.reduce_mean(loss)
@@ -36,14 +36,24 @@ def get_loss_and_training_op(n_vocab, labels, embed):
 
 def get_top_10_words(predictions, int_to_vocab):
     all_words = []
-    for prediction in predictions:
-        sim = prediction['similarity']
-        top_10_words = sim.argsort()[-11:]
+    for i in range(len(predictions)):
+        top_10_words = (-predictions[i, :]).argsort()[:11]
         words = [int_to_vocab[w] for w in top_10_words]
         print('Words nearest to {}:'.format(
-            words[-1]), ' '.join(words[:-1]))
+            words[0]), ' '.join(words[1:]))
         all_words.append(words)
     return all_words
+
+
+def get_predictions(features, embedding):
+    norm = tf.sqrt(tf.reduce_sum(
+        tf.square(embedding), 1, keepdims=True))
+    normalized_embedding = embedding / norm
+    valid_embedding = tf.nn.embedding_lookup(
+        normalized_embedding, features)
+    similarity = tf.matmul(valid_embedding,
+                           tf.transpose(normalized_embedding))
+    return similarity
 
 
 def model_fn(features, labels, mode, params):
@@ -71,7 +81,7 @@ def model_fn(features, labels, mode, params):
 def create_estimator(n_vocab):
     config = tf.estimator.RunConfig(
         model_dir='estimator_checkpoint',
-        save_checkpoints_steps=5000
+        save_checkpoints_steps=1000
     )
     return tf.estimator.Estimator(
         model_fn=model_fn,
