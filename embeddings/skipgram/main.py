@@ -48,7 +48,7 @@ def predict(valid_words, embedding, int_to_vocab):
     with tf.Session() as sess:
         saver = tf.train.Saver()
         sess.run(tf.global_variables_initializer())
-        saver.restore('checkpoint/model.ckpt')
+        saver.restore(sess, 'checkpoint/model.ckpt')
         predictions = sess.run(pred_op)
         words = get_top_10_words(predictions, int_to_vocab)
     return words
