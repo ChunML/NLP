@@ -59,17 +59,20 @@ def train(n_vocab, labels, embedding, embed, int_to_vocab):
     valid_words = sample_eval_data()
     with tf.Session() as sess:
         saver = tf.train.Saver()
-        losses = []
+        all_losses = []
+        batch_loss = []
         sess.run(tf.global_variables_initializer())
         start = time.time()
         for i in range(FLAGS.total_iterations):
             loss, _ = sess.run([loss_op, train_op])
-            losses.append(loss)
+            all_losses.append(loss)
+            batch_loss.append(loss)
             if i % FLAGS.log_every == 0:
                 end = time.time()
                 print('Iteration {}/{} '.format(i, FLAGS.total_iterations),
-                      'Average Loss: {:.4f}'.format(np.mean(losses)),
+                      'Average Loss: {:.4f}'.format(np.mean(batch_loss)),
                       '{:.4f} sec/{} iterations'.format((end - start), FLAGS.log_every))
+                batch_loss = []
                 start = time.time()
 
             if i % FLAGS.evaluate_every == 0:
@@ -78,6 +81,7 @@ def train(n_vocab, labels, embedding, embed, int_to_vocab):
                 predictions = sess.run(pred_op)
                 words = get_top_10_words(predictions, int_to_vocab)
         saver.save(sess, 'checkpoint/model.ckpt')
+        np.savez('checkpoint/all_losses.npz', all_losses)
 
 
 def main(unused_argv):
