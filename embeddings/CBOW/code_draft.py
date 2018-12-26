@@ -9,6 +9,17 @@ from urllib.request import urlretrieve
 import zipfile
 import time
 
+flags = tf.app.flags
+flags.DEFINE_integer('window_size', 5, 'window size')
+flags.DEFINE_integer('batch_size', 512, 'batch size')
+flags.DEFINE_integer('embedding_size', 300, 'embedding size')
+flags.DEFINE_integer('num_sampled', 100, 'number of negative samples for NSL computation')
+flags.DEFINE_integer('num_iterations', 50000, 'number of iterations for training')
+flags.DEFINE_integer('test_size', 16, 'window size')
+flags.DEFINE_integer('test_window', 100, 'window size')
+
+FLAGS = flags.FLAGS
+
 dataset_folder_path = 'data'
 dataset_filename = 'text8.zip'
 dataset_name = 'Text8 Dataset'
@@ -80,17 +91,19 @@ def read_data_from_file(data_path):
     print('After subsampling, first 30 words:', train_words[:30])
     print('After subsampling, total words:', len(train_words))
 
-    return train_words, int_to_vocab, vocab_to_int, n_vocab
+    # Subsampling makes it worse for eliminating contextual info
+    # return train_words, int_to_vocab, vocab_to_int, n_vocab
+    return int_words, int_to_vocab, vocab_to_int, n_vocab
 
 
-def create_target(batch, window_size):
+def _create_target(batch):
     x = []
     y = []
-    for i in range(window_size, len(batch) - window_size):
-        x.append(batch[i - window_size:i] +
-                 batch[i + 1:i + window_size + 1])
+    for i in range(FLAGS.window_size, len(batch) - FLAGS.window_size):
+        x.append(np.append(batch[i - FLAGS.window_size:i],
+                           batch[i + 1:i + FLAGS.window_size + 1]))
         y.append(batch[i])
-    return x, y
+    return np.array(x), np.array(y)[:, None]
 
 
 def create_batches(int_words, batch_size, window_size=5):
@@ -99,7 +112,29 @@ def create_batches(int_words, batch_size, window_size=5):
 
     for i in range(0, len(int_words), batch_size):
         x, y = create_target(int_words[i:i + batch_size], window_size)
-        yield np.array(x), np.array(y)
+        yield x, y
+
+
+def create_dataset(int_words, batch_size, window_size=5):
+    # TODO: need to find a solution for losing window_size target words per two batches
+    # The code below can solve that problem, but that takes too long
+    # Or, running it once than save the processed sequence somewhere might be an option
+    # for i in range(window_size, len(int_words), batch_size - window_size):
+    #     print(i / len(int_words))
+    #     if i == window_size:
+    #         new_int_words = int_words[i - window_size:i - window_size + batch_size]
+    #     else:
+    #         new_int_words = np.append(
+    #                 new_int_words,
+    #                 int_words[i - window_size:i - window_size + batch_size])
+    num_batches = int(len(int_words) // batch_size)
+    int_words = int_words[:num_batches * batch_size]
+    int_words = np.reshape(int_words, (-1, batch_size))
+    dataset = tf.data.Dataset.from_tensor_slices(int_words)
+    dataset = dataset.map(lambda batch: tuple(tf.py_func(
+        _create_target, [batch], [tf.int64, tf.int64])))
+    iterator = dataset.repeat().make_one_shot_iterator()
+    return iterator.get_next()
 
 
 def get_embed(n_vocab, inputs, embedding_size):
@@ -108,7 +143,7 @@ def get_embed(n_vocab, inputs, embedding_size):
         'embedding_weights', [n_vocab, embedding_size],
         initializer=tf.initializers.random_uniform(-1, 1))
     embed = None
-    for i in range(2 * window_size):
+    for i in range(2 * FLAGS.window_size):
         inp = tf.squeeze(
             tf.slice(inputs, [0, i], [tf.shape(inputs)[0], 1]), axis=1)
         if embed is None:
@@ -150,52 +185,41 @@ def get_predictions(test_words, embedding):
     return similarity
 
 
-batch_size = 1000
-window_size = 5
-embedding_size = 300
-num_sampled = 100
 train_words, int_to_vocab, vocab_to_int, n_vocab = read_data_from_file(
     'data/text8')
-inputs_ = tf.placeholder(tf.int32, [None, 2 * window_size])
-labels_ = tf.placeholder(tf.int32, [None, 1])
-embedding, embed = get_embed(n_vocab, inputs_, embedding_size)
+inputs_, labels_ = create_dataset(train_words, FLAGS.batch_size, FLAGS.window_size)
+
+embedding, embed = get_embed(n_vocab, inputs_, FLAGS.embedding_size)
 loss_op, train_op = get_loss_and_train_op(
-    n_vocab, embed, embedding_size, labels_, num_sampled)
+    n_vocab, embed, FLAGS.embedding_size, labels_, FLAGS.num_sampled)
 
-test_words = np.random.randint(0, 100, 8)
+
+test_words = np.array(random.sample(range(0, FLAGS.test_window), FLAGS.test_size // 2))
+test_words = np.append(test_words, random.sample(range(1000, 1000 + FLAGS.test_window), FLAGS.test_size // 2))
 similarity = get_predictions(test_words, embedding)
-
-num_epochs = 10
 
 with tf.Session() as sess:
     sess.run(tf.global_variables_initializer())
-    for e in range(num_epochs):
-        batches = create_batches(train_words, batch_size, window_size)
-        batch_loss = []
-        iteration = 0
-        start = time.time()
-        for inputs, labels in batches:
-            loss, _ = sess.run(
-                [loss_op, train_op],
-                feed_dict={
-                    inputs_: inputs,
-                    labels_: labels[:, None]})
-            batch_loss.append(loss)
-            if iteration % 100 == 0:
-                print('Epoch {}/{}'.format(e, num_epochs),
-                      'Iteration {}'.format(iteration),
-                      '{:.4f} sec'.format(time.time() - start),
-                      'Batch loss {:.4f}'.format(np.mean(batch_loss)))
-                start = time.time()
-            
-            if iteration % 1000 == 0:
-                sims = similarity.eval()
-                for i in range(sims.shape[0]):
-                    top_k = (-sims[i, :]).argsort()[:9]
-                    log = '{}: '.format(int_to_vocab[top_k[0]])
-                    for k in top_k[1:]:
-                        log += '{}, '.format(int_to_vocab[k])
-                    print(log)
-                batch_loss = []
+    print_loss = 0
+    start = time.time()
+    for i in range(FLAGS.num_iterations):
+        all_losses = []
+        loss, _ = sess.run([loss_op, train_op])
+        all_losses.append(loss)
+        print_loss += loss
+        if i % 100 == 0:
+            print('Iteration {}/{}'.format(i, FLAGS.num_iterations),
+                  'Average loss {:.4f}'.format(np.mean(print_loss / 100)),
+                  'in {:.4f} sec'.format(time.time() - start))
+            print_loss = 0
+            start = time.time()
 
-            iteration += 1
+        if i % 1000 == 0:
+            sims = similarity.eval()
+            for ii in range(sims.shape[0]):
+                top_k = (-sims[ii, :]).argsort()[:9]
+                log = '{}: '.format(int_to_vocab[top_k[0]])
+                for k in top_k[1:]:
+                    log += '{}, '.format(int_to_vocab[k])
+                print(log)
+
