@@ -9,7 +9,7 @@ EOS = '</s>'
 UNK_token = 0
 
 src_vocab_size = 1000
-encoder_hidden_size = 256
+encoder_hidden_size = 300
 target_vocab_size = 1200
 decoder_hidden_size = 300
 batch_size = 10
@@ -110,6 +110,7 @@ def create_network(source_sequence,
       encoder_lstm,
       encoder_embedded,
       dtype=tf.float32,
+      time_major=True,
       sequence_length=source_sequence_length)
 
   with tf.variable_scope('decoder'):
@@ -123,7 +124,7 @@ def create_network(source_sequence,
     decoder_lstm = tf.nn.rnn_cell.LSTMCell(decoder_hidden_size)
     decoder_output_layer = tf.layers.Dense(target_vocab_size, use_bias=False)
 
-    decoder_initial_state = decoder_lstm.zero_state(batch_size, tf.float32)
+    decoder_initial_state = encoder_state # decoder_lstm.zero_state(batch_size, tf.float32)
 
     helper = tf.contrib.seq2seq.TrainingHelper(
       decoder_embedded,
