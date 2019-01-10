@@ -3,11 +3,11 @@ from tensorflow.python.ops import lookup_ops
 import codecs
 import numpy as np
 
+# TODO: Use tf.app.flags
 UNK = '<unk>'
 SOS = '<s>'
 EOS = '</s>'
 UNK_token = 0
-
 encoder_hidden_size = 512
 decoder_hidden_size = 512
 encoder_num_layers = 2
@@ -17,6 +17,9 @@ learning_rate = 0.01
 source_max_length = 50
 target_max_length = 50
 max_gradient = 5.0
+num_iterations = 12000
+print_every = 100
+save_every = 1000
 
 # ======================== DATA READING =============================
 def load_vocab(vocab_file):
@@ -100,6 +103,8 @@ def create_network(source_sequence,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
     source_sequence = tf.transpose(source_sequence)
     encoder_embedded = tf.nn.embedding_lookup(encoder_embedding, source_sequence)
+
+    # TODO: Update to bidirectional RNN
     def _create_encoder_cell(hidden_size):
       return tf.nn.rnn_cell.LSTMCell(hidden_size)
     encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
@@ -119,6 +124,8 @@ def create_network(source_sequence,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
     target_sequence_in = tf.transpose(target_sequence_in)
     decoder_embedded = tf.nn.embedding_lookup(decoder_embedding, target_sequence_in)
+
+    # TODO: Update to bidirectional RNN
     def _create_decoder_cell(hidden_size):
       return tf.nn.rnn_cell.LSTMCell(hidden_size)
     decoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
@@ -155,7 +162,7 @@ def create_network(source_sequence,
 
   with tf.variable_scope('decoder', reuse=True):
     target_sos_id = tf.cast(target_vocab.lookup(tf.constant(SOS)), tf.int32)
-    target_eos_id = tf.cast(target_vocab.lookup(tf.constant('.')), tf.int32)
+    target_eos_id = tf.cast(target_vocab.lookup(tf.constant(EOS)), tf.int32)
     infer_sequence_in = tf.fill([batch_size], target_sos_id)
 
     infer_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
@@ -186,6 +193,8 @@ def create_train_op(loss):
     params)
   clipped_gradients, _ = tf.clip_by_global_norm(
     gradients, max_gradient)
+
+  # TODO: Schedule learning_rate update
   opt = tf.train.AdamOptimizer(learning_rate)
   train_op = opt.apply_gradients(
     zip(clipped_gradients, params), global_step)
@@ -218,18 +227,20 @@ loss, t_source_sequence, t_target_sequence_in, preds = create_network(
 train_op = create_train_op(loss)
 
 sess = tf.Session()
+
 sess.run(tf.global_variables_initializer())
 sess.run(tf.tables_initializer())
 sess.run(iterator_initializer)
+saver = tf.train.Saver()
 
-for i in range(12000):
+for i in range(num_iterations):
   src_seq, tar_seq, predictions, loss_value, _ = sess.run(
     [t_source_sequence, t_target_sequence_in, preds, loss, train_op])
-  if i % 100 == 0:
+  if (i + 1) % print_every == 0:
     print('Loss value at step {}: {:.4f}'.format(i + 1, loss_value))
-    src_sent = ' '.join([source_int_to_vocab[i] for i in src_seq[:, 0]])
-    tar_sent = ' '.join([target_int_to_vocab[i] for i in tar_seq[:, 0]])
-    pred_sent = ' '.join([target_int_to_vocab[i] for i in predictions[:, 0]])
+    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[:, 0]])
+    tar_sent = ' '.join([target_int_to_vocab[ix] for ix in tar_seq[:, 0]])
+    pred_sent = ' '.join([target_int_to_vocab[ix] for ix in predictions[:, 0]])
 
     if EOS in src_sent:
       eos_index = src_sent.index(EOS)
@@ -240,6 +251,10 @@ for i in range(12000):
     if EOS in pred_sent:
       eos_index = pred_sent.index(EOS)
       pred_sent = pred_sent[:eos_index]
-    print('<src>', src_sent)
-    print('<dst>', tar_sent)
-    print('<pred>', pred_sent)
+    print('<src> ' + src_sent.encode('utf-8'))
+    print('<dst> ' + tar_sent.encode('utf-8'))
+    print('<pred> ' + pred_sent.encode('utf-8'))
+
+  if (i + 1) % save_every == 0:
+    print('Saving checkpoint for step {}...'.format(i + 1))
+    saver.save(sess, 'checkpoint/model-{}.ckpt'.format(i + 1))
