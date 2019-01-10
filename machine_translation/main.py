@@ -8,12 +8,12 @@ SOS = '<s>'
 EOS = '</s>'
 UNK_token = 0
 
-src_vocab_size = 1000
-encoder_hidden_size = 300
-target_vocab_size = 1200
-decoder_hidden_size = 300
-batch_size = 10
-learning_rate = 0.001
+encoder_hidden_size = 512
+decoder_hidden_size = 512
+encoder_num_layers = 2
+decoder_num_layers = 2
+batch_size = 128
+learning_rate = 0.01
 source_max_length = 50
 target_max_length = 50
 max_gradient = 5.0
@@ -28,12 +28,6 @@ def load_vocab(vocab_file):
       vocab_size += 1
   return vocab, vocab_size
 
-
-# From data reader (per batch):
-# source sequence [source_max_time, batch_size]
-# source sequence length
-# target sequence [target_max_time, batch_size]
-# target sequence length
 def create_input_data(source_data_file, target_data_file,
                       source_vocab_file, target_vocab_file):
   source_dataset = tf.data.TextLineDataset(tf.gfile.Glob(source_data_file))
@@ -73,7 +67,7 @@ def create_input_data(source_data_file, target_data_file,
     lambda src, tgt_in, tgt_out: (
       src, tgt_in, tgt_out, tf.size(src), tf.size(tgt_in))).prefetch(output_buffer_size)
 
-  dataset = dataset.repeat().padded_batch(
+  dataset = dataset.shuffle(100).repeat().padded_batch(
     batch_size,
     padded_shapes=(tf.TensorShape([None]),
                    tf.TensorShape([None]),
@@ -81,22 +75,23 @@ def create_input_data(source_data_file, target_data_file,
                    tf.TensorShape([]),
                    tf.TensorShape([])),
     padding_values=(source_eos_id,
-                   target_eos_id,
-                   target_eos_id,
-                   0,
-                   0))
+                    target_eos_id,
+                    target_eos_id,
+                    0,
+                    0))
 
   iterator = dataset.make_initializable_iterator()
 
-  return iterator.get_next(), iterator.initializer
+  return iterator.get_next(), iterator.initializer, source_vocab, target_vocab
 
 # ======================== SEQ2SEQ NETWORK =============================
 def create_network(source_sequence,
-            target_sequence_in, target_sequence_out,
-            source_sequence_length,
-            target_sequence_length,
-            source_vocab_size,
-            target_vocab_size):
+                   target_sequence_in, target_sequence_out,
+                   source_vocab, target_vocab,
+                   source_sequence_length,
+                   target_sequence_length,
+                   source_vocab_size,
+                   target_vocab_size):
   with tf.variable_scope('encoder'):
     encoder_embedding = tf.get_variable(
       'encoder_embedding_weights',
@@ -105,7 +100,10 @@ def create_network(source_sequence,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
     source_sequence = tf.transpose(source_sequence)
     encoder_embedded = tf.nn.embedding_lookup(encoder_embedding, source_sequence)
-    encoder_lstm = tf.nn.rnn_cell.LSTMCell(encoder_hidden_size)
+    def _create_encoder_cell(hidden_size):
+      return tf.nn.rnn_cell.LSTMCell(hidden_size)
+    encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
+      [_create_encoder_cell(encoder_hidden_size) for _ in range(encoder_num_layers)])
     encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
       encoder_lstm,
       encoder_embedded,
@@ -121,10 +119,13 @@ def create_network(source_sequence,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
     target_sequence_in = tf.transpose(target_sequence_in)
     decoder_embedded = tf.nn.embedding_lookup(decoder_embedding, target_sequence_in)
-    decoder_lstm = tf.nn.rnn_cell.LSTMCell(decoder_hidden_size)
+    def _create_decoder_cell(hidden_size):
+      return tf.nn.rnn_cell.LSTMCell(hidden_size)
+    decoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
+      [_create_decoder_cell(decoder_hidden_size) for _ in range(decoder_num_layers)])
     decoder_output_layer = tf.layers.Dense(target_vocab_size, use_bias=False)
 
-    decoder_initial_state = encoder_state # decoder_lstm.zero_state(batch_size, tf.float32)
+    decoder_initial_state = encoder_state
 
     helper = tf.contrib.seq2seq.TrainingHelper(
       decoder_embedded,
@@ -134,25 +135,47 @@ def create_network(source_sequence,
     my_decoder = tf.contrib.seq2seq.BasicDecoder(
       decoder_lstm,
       helper,
-      decoder_initial_state)
+      decoder_initial_state,
+      decoder_output_layer)
 
     decoder_outputs, decoder_final_states, _ = tf.contrib.seq2seq.dynamic_decode(
       my_decoder,
       output_time_major=True,
       swap_memory=True)
 
-    logits = decoder_output_layer(decoder_outputs.rnn_output)
-
     target_sequence_out = tf.transpose(target_sequence_out)
     cross_entropy = tf.nn.sparse_softmax_cross_entropy_with_logits(
-      labels=target_sequence_out, logits=logits)
+      labels=target_sequence_out, logits=decoder_outputs.rnn_output)
     loss_weights = tf.sequence_mask(
       target_sequence_length, tf.shape(target_sequence_out)[0],
       dtype=tf.float32)
     loss_weights = tf.transpose(loss_weights)
 
     loss = tf.reduce_sum(cross_entropy * loss_weights) / tf.to_float(batch_size)
-  return loss, source_sequence, target_sequence_in, logits
+
+  with tf.variable_scope('decoder', reuse=True):
+    target_sos_id = tf.cast(target_vocab.lookup(tf.constant(SOS)), tf.int32)
+    target_eos_id = tf.cast(target_vocab.lookup(tf.constant('.')), tf.int32)
+    infer_sequence_in = tf.fill([batch_size], target_sos_id)
+
+    infer_helper = tf.contrib.seq2seq.GreedyEmbeddingHelper(
+      decoder_embedding,
+      infer_sequence_in,
+      target_eos_id)
+    infer_decoder = tf.contrib.seq2seq.BasicDecoder(
+      decoder_lstm,
+      infer_helper,
+      decoder_initial_state,
+      decoder_output_layer)
+
+    maximum_iterations = tf.round(tf.reduce_max(source_sequence_length) * 2)
+    infer_decoder_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
+      infer_decoder,
+      maximum_iterations=maximum_iterations,
+      output_time_major=True,
+      swap_memory=True)
+    preds = infer_decoder_outputs.sample_id
+  return loss, source_sequence, target_sequence_in, preds
 
 def create_train_op(loss):
   global_step = tf.Variable(0, trainable=False)
@@ -168,23 +191,25 @@ def create_train_op(loss):
     zip(clipped_gradients, params), global_step)
   return train_op
 
-source_data_file = '../data/tst2012.vi'
-target_data_file = '../data/tst2012.en'
+source_data_file = '../data/train.vi'
+target_data_file = '../data/train.en'
 source_vocab_file = '../data/vocab.vi'
 target_vocab_file = '../data/vocab.en'
 
-source_vocab, source_vocab_size = load_vocab(source_vocab_file)
-target_vocab, target_vocab_size = load_vocab(target_vocab_file)
+source_int_to_vocab, source_vocab_size = load_vocab(source_vocab_file)
+target_int_to_vocab, target_vocab_size = load_vocab(target_vocab_file)
 
 (source_sequence,
  target_sequence_in, target_sequence_out,
  source_sequence_length, target_sequence_length),\
-iterator_initializer = create_input_data(source_data_file, target_data_file,
-                                         source_vocab_file, target_vocab_file)
+ iterator_initializer, source_vocab, target_vocab = create_input_data(
+  source_data_file, target_data_file,
+  source_vocab_file, target_vocab_file)
 
-loss, t_source_sequence, t_target_sequence_in, logits = create_network(
+loss, t_source_sequence, t_target_sequence_in, preds = create_network(
   source_sequence,
   target_sequence_in, target_sequence_out,
+  source_vocab, target_vocab,
   source_sequence_length,
   target_sequence_length,
   source_vocab_size,
@@ -197,19 +222,24 @@ sess.run(tf.global_variables_initializer())
 sess.run(tf.tables_initializer())
 sess.run(iterator_initializer)
 
-losses = []
-for i in range(10000):
-  src_seq, tar_seq, logit_value, loss_value, _ = sess.run(
-    [t_source_sequence, t_target_sequence_in, logits, loss, train_op])
+for i in range(12000):
+  src_seq, tar_seq, predictions, loss_value, _ = sess.run(
+    [t_source_sequence, t_target_sequence_in, preds, loss, train_op])
   if i % 100 == 0:
-    predictions = np.argmax(logit_value, axis=2)
     print('Loss value at step {}: {:.4f}'.format(i + 1, loss_value))
-    src_sent = ' '.join([source_vocab[i] for i in src_seq[:, 0]])
-    tar_sent = ' '.join([target_vocab[i] for i in tar_seq[:, 0]])
-    pred_sent = ' '.join([target_vocab[i] for i in predictions[:, 0]])
+    src_sent = ' '.join([source_int_to_vocab[i] for i in src_seq[:, 0]])
+    tar_sent = ' '.join([target_int_to_vocab[i] for i in tar_seq[:, 0]])
+    pred_sent = ' '.join([target_int_to_vocab[i] for i in predictions[:, 0]])
+
+    if EOS in src_sent:
+      eos_index = src_sent.index(EOS)
+      src_sent = src_sent[:eos_index]
+    if EOS in tar_sent:
+      eos_index = tar_sent.index(EOS)
+      tar_sent = tar_sent[:eos_index]
+    if EOS in pred_sent:
+      eos_index = pred_sent.index(EOS)
+      pred_sent = pred_sent[:eos_index]
     print('<src>', src_sent)
     print('<dst>', tar_sent)
     print('<pred>', pred_sent)
-    losses.append(loss_value)
-
-np.savetxt('loss.txt', losses)
