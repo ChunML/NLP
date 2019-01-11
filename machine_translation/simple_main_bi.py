@@ -65,7 +65,7 @@ def create_input_data(source_data_file, target_data_file,
   dataset = dataset.prefetch(output_buffer_size)
 
   dataset = dataset.map(
-    lambda src, tgt: (tf.reverse(src, axis=[0]),
+    lambda src, tgt: (src,
                       tf.concat(([target_sos_id], tgt), 0),
                       tf.concat((tgt, [target_eos_id]), 0))).prefetch(output_buffer_size)
 
@@ -104,7 +104,7 @@ def create_network(source_sequence,
       [source_vocab_size, encoder_hidden_size],
       dtype=tf.float32,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
-    # source_sequence = tf.reverse(source_sequence, axis=[1])
+
     source_sequence = tf.transpose(source_sequence)
     encoder_embedded = tf.nn.embedding_lookup(encoder_embedding, source_sequence)
 
@@ -112,14 +112,34 @@ def create_network(source_sequence,
     def _create_encoder_cell(hidden_size):
       cell =  tf.nn.rnn_cell.LSTMCell(hidden_size)
       return tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=keep_prob)
-    encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
-      [_create_encoder_cell(encoder_hidden_size) for _ in range(encoder_num_layers)])
-    encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
-      encoder_lstm,
+
+    bi_num_layers = int(encoder_num_layers / 2)
+
+    if bi_num_layers == 1:
+      fw_encoder_lstm = _create_encoder_cell(encoder_hidden_size)
+      bw_encoder_lstm = _create_encoder_cell(encoder_hidden_size)
+    else:
+      fw_encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
+        [_create_encoder_cell(encoder_hidden_size) for _ in range(bi_num_layers)])
+      bw_encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
+        [_create_encoder_cell(encoder_hidden_size) for _ in range(bi_num_layers)])
+
+    encoder_outputs, bi_encoder_state = tf.nn.bidirectional_dynamic_rnn(
+      fw_encoder_lstm,
+      bw_encoder_lstm,
       encoder_embedded,
       dtype=tf.float32,
       time_major=True,
       sequence_length=source_sequence_length)
+
+    if bi_num_layers == 1:
+      encoder_state = bi_encoder_state
+    else:
+      encoder_state = []
+      for layer_i in range(bi_num_layers):
+        encoder_state.append(bi_encoder_state[0][layer_i])
+        encoder_state.append(bi_encoder_state[1][layer_i])
+      encoder_state = tuple(encoder_state)
 
   with tf.variable_scope('decoder'):
     decoder_embedding = tf.get_variable(
@@ -254,13 +274,13 @@ for _ in range(num_iterations):
   if (i + 1) % print_every == 0:
     random_id = np.random.choice(src_seq.shape[1])
     print('Step {}: loss {:.4f}'.format(i + 1, loss_value))
-    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[::-1, random_id]])
+    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[:, random_id]])
     tar_sent = ' '.join([target_int_to_vocab[ix] for ix in tar_seq[:, random_id]])
     pred_sent = ' '.join([target_int_to_vocab[ix] for ix in predictions[:, random_id]])
 
     if EOS in src_sent:
-      eos_index = src_sent.rindex(EOS)
-      src_sent = src_sent[eos_index + len(EOS):]
+      eos_index = src_sent.index(EOS)
+      src_sent = src_sent[:eos_index]
     if EOS in tar_sent:
       eos_index = tar_sent.index(EOS)
       tar_sent = tar_sent[:eos_index]
