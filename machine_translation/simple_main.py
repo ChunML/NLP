@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import tensorflow as tf
 from tensorflow.python.ops import lookup_ops
 import codecs
@@ -13,6 +15,7 @@ decoder_hidden_size = 512
 encoder_num_layers = 2
 decoder_num_layers = 2
 batch_size = 128
+keep_prob = 0.7
 learning_rate = 0.01
 source_max_length = 50
 target_max_length = 50
@@ -106,7 +109,8 @@ def create_network(source_sequence,
 
     # TODO: Update to bidirectional RNN
     def _create_encoder_cell(hidden_size):
-      return tf.nn.rnn_cell.LSTMCell(hidden_size)
+      cell =  tf.nn.rnn_cell.LSTMCell(hidden_size)
+      return tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=keep_prob)
     encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
       [_create_encoder_cell(encoder_hidden_size) for _ in range(encoder_num_layers)])
     encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
@@ -127,7 +131,8 @@ def create_network(source_sequence,
 
     # TODO: Update to bidirectional RNN
     def _create_decoder_cell(hidden_size):
-      return tf.nn.rnn_cell.LSTMCell(hidden_size)
+      cell =  tf.nn.rnn_cell.LSTMCell(hidden_size)
+      return tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=keep_prob)
     decoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
       [_create_decoder_cell(decoder_hidden_size) for _ in range(decoder_num_layers)])
     decoder_output_layer = tf.layers.Dense(target_vocab_size, use_bias=False)
@@ -185,7 +190,8 @@ def create_network(source_sequence,
   return loss, source_sequence, target_sequence_in, preds
 
 def create_train_op(loss):
-  global_step = tf.Variable(0, trainable=False)
+  # global_step = tf.Variable(0, trainable=False)
+  global_step = tf.train.get_or_create_global_step()
 
   params = tf.trainable_variables()
   gradients = tf.gradients(
@@ -198,7 +204,7 @@ def create_train_op(loss):
   opt = tf.train.AdamOptimizer(learning_rate)
   train_op = opt.apply_gradients(
     zip(clipped_gradients, params), global_step)
-  return train_op
+  return global_step, train_op
 
 source_data_file = '../data/train.vi'
 target_data_file = '../data/train.en'
@@ -224,23 +230,32 @@ loss, t_source_sequence, t_target_sequence_in, preds = create_network(
   source_vocab_size,
   target_vocab_size)
 
-train_op = create_train_op(loss)
+global_step, train_op = create_train_op(loss)
 
 sess = tf.Session()
 
 sess.run(tf.global_variables_initializer())
 sess.run(tf.tables_initializer())
 sess.run(iterator_initializer)
-saver = tf.train.Saver()
 
-for i in range(num_iterations):
+saver = tf.train.Saver()
+latest_checkpoint = tf.train.latest_checkpoint('checkpoint')
+if latest_checkpoint and tf.train.checkpoint_exists(latest_checkpoint):
+  saver.restore(sess, latest_checkpoint)
+
+for _ in range(num_iterations):
+  i = global_step.eval(sess)
+  if i >= num_iterations:
+    print('Training complete!')
+    break
   src_seq, tar_seq, predictions, loss_value, _ = sess.run(
     [t_source_sequence, t_target_sequence_in, preds, loss, train_op])
   if (i + 1) % print_every == 0:
-    print('Loss value at step {}: {:.4f}'.format(i + 1, loss_value))
-    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[:, 0]])
-    tar_sent = ' '.join([target_int_to_vocab[ix] for ix in tar_seq[:, 0]])
-    pred_sent = ' '.join([target_int_to_vocab[ix] for ix in predictions[:, 0]])
+    random_id = np.random.choice(src_seq.shape[1])
+    print('Step {}: loss {:.4f}'.format(i + 1, loss_value))
+    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[:, random_id]])
+    tar_sent = ' '.join([target_int_to_vocab[ix] for ix in tar_seq[:, random_id]])
+    pred_sent = ' '.join([target_int_to_vocab[ix] for ix in predictions[:, random_id]])
 
     if EOS in src_sent:
       eos_index = src_sent.index(EOS)
@@ -251,10 +266,11 @@ for i in range(num_iterations):
     if EOS in pred_sent:
       eos_index = pred_sent.index(EOS)
       pred_sent = pred_sent[:eos_index]
-    print('<src> ' + src_sent.encode('utf-8'))
-    print('<dst> ' + tar_sent.encode('utf-8'))
-    print('<pred> ' + pred_sent.encode('utf-8'))
+    print('<src>', src_sent.encode('utf-8'))
+    print('<dst>', tar_sent.encode('utf-8'))
+    print('<pred>', pred_sent.encode('utf-8'))
+    print()
 
   if (i + 1) % save_every == 0:
-    print('Saving checkpoint for step {}...'.format(i + 1))
+    print('Saving checkpoint for step {}...\n'.format(i + 1))
     saver.save(sess, 'checkpoint/model-{}.ckpt'.format(i + 1))
