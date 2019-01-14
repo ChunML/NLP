@@ -10,8 +10,7 @@ UNK = '<unk>'
 SOS = '<s>'
 EOS = '</s>'
 UNK_token = 0
-encoder_hidden_size = 512
-decoder_hidden_size = 512
+hidden_size = 128
 encoder_num_layers = 2
 decoder_num_layers = 2
 batch_size = 128
@@ -65,7 +64,7 @@ def create_input_data(source_data_file, target_data_file,
   dataset = dataset.prefetch(output_buffer_size)
 
   dataset = dataset.map(
-    lambda src, tgt: (src,
+    lambda src, tgt: (tf.reverse(src, axis=[0]),
                       tf.concat(([target_sos_id], tgt), 0),
                       tf.concat((tgt, [target_eos_id]), 0))).prefetch(output_buffer_size)
 
@@ -101,7 +100,7 @@ def create_network(source_sequence,
   with tf.variable_scope('encoder'):
     encoder_embedding = tf.get_variable(
       'encoder_embedding_weights',
-      [source_vocab_size, encoder_hidden_size],
+      [source_vocab_size, hidden_size],
       dtype=tf.float32,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
 
@@ -112,39 +111,27 @@ def create_network(source_sequence,
     def _create_encoder_cell(hidden_size):
       cell =  tf.nn.rnn_cell.LSTMCell(hidden_size)
       return tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=keep_prob)
-
-    bi_num_layers = int(encoder_num_layers / 2)
-
-    if bi_num_layers == 1:
-      fw_encoder_lstm = _create_encoder_cell(encoder_hidden_size)
-      bw_encoder_lstm = _create_encoder_cell(encoder_hidden_size)
-    else:
-      fw_encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
-        [_create_encoder_cell(encoder_hidden_size) for _ in range(bi_num_layers)])
-      bw_encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
-        [_create_encoder_cell(encoder_hidden_size) for _ in range(bi_num_layers)])
-
-    encoder_outputs, bi_encoder_state = tf.nn.bidirectional_dynamic_rnn(
-      fw_encoder_lstm,
-      bw_encoder_lstm,
+    encoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
+      [_create_encoder_cell(hidden_size) for _ in range(encoder_num_layers)])
+    encoder_outputs, encoder_state = tf.nn.dynamic_rnn(
+      encoder_lstm,
       encoder_embedded,
       dtype=tf.float32,
       time_major=True,
       sequence_length=source_sequence_length)
 
-    if bi_num_layers == 1:
-      encoder_state = bi_encoder_state
-    else:
-      encoder_state = []
-      for layer_i in range(bi_num_layers):
-        encoder_state.append(bi_encoder_state[0][layer_i])
-        encoder_state.append(bi_encoder_state[1][layer_i])
-      encoder_state = tuple(encoder_state)
+  with tf.variable_scope('attention'):
+    attention_state = tf.transpose(encoder_outputs, [1, 0, 2])
+    attention_mechanism = tf.contrib.seq2seq.LuongAttention(
+      hidden_size,
+      attention_state,
+      scale=True,
+      memory_sequence_length=source_sequence_length)
 
   with tf.variable_scope('decoder'):
     decoder_embedding = tf.get_variable(
       'decoder_embedding_weights',
-      [target_vocab_size, decoder_hidden_size],
+      [target_vocab_size, hidden_size],
       dtype=tf.float32,
       initializer=tf.initializers.random_uniform(-1, 1, dtype=tf.float32))
     target_sequence_in = tf.transpose(target_sequence_in)
@@ -155,10 +142,13 @@ def create_network(source_sequence,
       cell =  tf.nn.rnn_cell.LSTMCell(hidden_size)
       return tf.nn.rnn_cell.DropoutWrapper(cell, input_keep_prob=keep_prob)
     decoder_lstm = tf.nn.rnn_cell.MultiRNNCell(
-      [_create_decoder_cell(decoder_hidden_size) for _ in range(decoder_num_layers)])
+      [_create_decoder_cell(hidden_size) for _ in range(decoder_num_layers)])
+    decoder_lstm = tf.contrib.seq2seq.AttentionWrapper(
+      decoder_lstm, attention_mechanism,
+      attention_layer_size=hidden_size)
     decoder_output_layer = tf.layers.Dense(target_vocab_size, use_bias=False)
 
-    decoder_initial_state = encoder_state
+    decoder_initial_state = decoder_lstm.zero_state(batch_size, tf.float32).clone(cell_state=encoder_state)
 
     helper = tf.contrib.seq2seq.TrainingHelper(
       decoder_embedded,
@@ -274,13 +264,13 @@ for _ in range(num_iterations):
   if (i + 1) % print_every == 0:
     random_id = np.random.choice(src_seq.shape[1])
     print('Step {}: loss {:.4f}'.format(i + 1, loss_value))
-    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[:, random_id]])
+    src_sent = ' '.join([source_int_to_vocab[ix] for ix in src_seq[::-1, random_id]])
     tar_sent = ' '.join([target_int_to_vocab[ix] for ix in tar_seq[:, random_id]])
     pred_sent = ' '.join([target_int_to_vocab[ix] for ix in predictions[:, random_id]])
 
     if EOS in src_sent:
-      eos_index = src_sent.index(EOS)
-      src_sent = src_sent[:eos_index]
+      eos_index = src_sent.rindex(EOS)
+      src_sent = src_sent[eos_index + len(EOS):]
     if EOS in tar_sent:
       eos_index = tar_sent.index(EOS)
       tar_sent = tar_sent[:eos_index]
