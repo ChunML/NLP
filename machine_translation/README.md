@@ -1,4 +1,4 @@
-## Neural Translation Machine using Seq2Seq with Attention Mechanism
+## Neural Machine Translation using Seq2Seq with Attention Mechanism
 
 ### Overview
 To Be Updated
