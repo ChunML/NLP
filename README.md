@@ -1,9 +1,9 @@
 ## Natural Language Processing Projects
 
 ### Overview
-This is where I play with NLP, aka Natural Processing Language, the art of teaching machine to understand and mimic human's natural language (semantically and/or syntactically).
+This is where I play with NLP, aka Natural Language Processing, the art of teaching machine to understand and mimic human's natural language (semantically and/or syntactically).
 
-Projects in this repository are still ongoing and gradually updated. README files' content will be updated accordingly. Maybe I'll write some blog posts if necessary.
+Projects in this repository are still in progress and gradually updated. README's content will be updated accordingly. Maybe I'll write some blog posts if necessary.
 
 ### Content
 At present, this repository contains the projects below.
