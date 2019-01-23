@@ -33,7 +33,7 @@ FLAGS = flags.FLAGS
 # ======================== DATA READING =============================
 def load_vocab(vocab_file):
   vocab = []
-  with codecs.getreader('utf-8')(tf.gfile.GFile(vocab_file, 'r')) as f:
+  with open(vocab_file, 'r', encoding='utf-8') as f:
     vocab_size = 0
     for word in f:
       vocab.append(word.strip())
@@ -135,7 +135,7 @@ def create_network(source_sequence, sos, eos,
     attention_mechanism = tf.contrib.seq2seq.LuongAttention(
       hidden_size,
       attention_state,
-      scale=True,
+      scale=False,
       memory_sequence_length=source_sequence_length)
 
   with tf.variable_scope('decoder'):

@@ -2,7 +2,6 @@ from __future__ import print_function
 
 import tensorflow as tf
 from tensorflow.python.ops import lookup_ops
-import codecs
 import numpy as np
 
 # TODO: Use tf.app.flags
@@ -33,7 +32,7 @@ FLAGS = flags.FLAGS
 # ======================== DATA READING =============================
 def load_vocab(vocab_file):
   vocab = []
-  with codecs.getreader('utf-8')(tf.gfile.GFile(vocab_file, 'r')) as f:
+  with open(vocab_file, 'r', encoding='utf-8') as f:
     vocab_size = 0
     for word in f:
       vocab.append(word.strip())
