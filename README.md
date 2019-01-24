@@ -8,14 +8,18 @@ Projects in this repository are still in progress and gradually updated. README'
 ### Content
 At present, this repository contains the projects below.
 
-1/ Embeddings: [link](https://github.com/ChunML/NLP/tree/master/embeddings)
+1/ [Embeddings](https://github.com/ChunML/NLP/tree/master/embeddings)
 
 To Be Updated
 
-2/ Text Generator: [link](https://github.com/ChunML/NLP/tree/master/text_generation)
+2/ [Text Generator](https://github.com/ChunML/NLP/tree/master/text_generation)
 
 To Be Updated
 
-3/ Machine Translation: [link](https://github.com/ChunML/NLP/tree/master/machine_translation)
+3/ [Machine Translation](https://github.com/ChunML/NLP/tree/master/machine_translation)
+
+To Be Updated
+
+4/ [Chat Bot](https://github.com/ChunML/NLP/tree/master/chatbot)
 
 To Be Updated
