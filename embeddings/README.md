@@ -54,7 +54,7 @@ In NLP problems, we usually have to deal with vectors of very large size (becaus
 
 To make it worse, in word embedding training, there is only one ground-truth word among `vocab_size` words. You can do the math yourselves, but taking everyone into gradient computing is not a good idea (high cost, low efficience).
 
-Solution for this? When computing gradients, we randomly use some of the negative words (together with the target word). This method has been proved to increase the training efficience, yet maintaining good results in practice. Read more [here](https://arxiv.org/abs/1412.2007){:target="_blank"}.
+Solution for this? When computing gradients, we randomly use some of the negative words (together with the target word). This method has been proved to increase the training efficience, yet maintaining good results in practice. Read more <a href="https://arxiv.org/abs/1412.2007" target="_blank">here</a>.
 
 So here is how we implement in Tensorflow. Pay attention to the shape of the **weights**, it's `[vocab_size, embedding_size]`, not the other way around.
 
@@ -80,6 +80,16 @@ optimizer = tf.train.AdamOptimizer().minimize(cost)
 ```
 
 ### Inference
+
+```python
+valid_dataset = tf.constant(examples, dtype=tf.int32)
+norm = tf.sqrt(tf.reduce_sum(tf.square(embedding), 1, keepdims=True))
+normalized_embedding = embedding / norm
+valid_embedding = tf.nn.embedding_lookup(
+    normalized_embedding, valid_dataset)
+similarity = tf.matmul(valid_embedding,
+                       tf.transpose(normalized_embedding))
+```
 
 ## Reference
 - Udacity's Embeddings: [link](https://github.com/udacity/deep-learning/tree/master/embeddings)
