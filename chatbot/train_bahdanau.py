@@ -23,7 +23,7 @@ flags.DEFINE_float('learning_rate', 0.001, 'initial learning rate')
 flags.DEFINE_integer('source_max_length', 20, 'maximum length of source sequence')
 flags.DEFINE_integer('target_max_length', 20, 'maximum length of target sequence')
 flags.DEFINE_float('max_gradient', 5.0, 'threshold value for gradient clipping')
-flags.DEFINE_integer('num_iterations', 17000, 'number of iterations for training')
+flags.DEFINE_integer('num_iterations', 30000, 'number of iterations for training')
 flags.DEFINE_integer('print_every', 100, 'print loss and sample every ... iterations')
 flags.DEFINE_integer('save_every', 1000, 'save checkpoint every ... iterations')
 
@@ -307,6 +307,11 @@ for _ in range(FLAGS.num_iterations):
     print('<dst>', tar_sent.encode('utf-8'))
     print('<pred>', pred_sent.encode('utf-8'))
     print()
+
+    with open('chatlog', 'a', encoding='utf-8') as f:
+        f.write('<src>' + src_sent + '\n')
+        f.write('<dst>' + tar_sent + '\n')
+        f.write('<pred>' + pred_sent + '\n\n')
 
   if (i + 1) % FLAGS.save_every == 0:
     print('Saving checkpoint for step {}...\n'.format(i + 1))
