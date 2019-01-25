@@ -11,7 +11,7 @@ To Be Updated
 
 ## Inference
 
-Here's are some examples of my chatbot, after being trained using Cornell Movie Dataset. Kind of fun!
+Below are some examples of my chatbot, after being trained using Cornell Movie Dataset. Kind of fun!
 
 ```
 >Chun: Hello
