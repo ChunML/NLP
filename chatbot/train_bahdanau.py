@@ -20,6 +20,7 @@ flags.DEFINE_integer('decoder_num_layers', 2, 'number of layers of decoder')
 flags.DEFINE_integer('batch_size', 64, 'batch size')
 flags.DEFINE_float('keep_prob', 0.8, 'keeping ratio for dropout')
 flags.DEFINE_float('learning_rate', 0.001, 'initial learning rate')
+flags.DEFINE_float('decay_factor', 0.5, 'initial learning rate')
 flags.DEFINE_integer('source_max_length', 20, 'maximum length of source sequence')
 flags.DEFINE_integer('target_max_length', 20, 'maximum length of target sequence')
 flags.DEFINE_float('max_gradient', 5.0, 'threshold value for gradient clipping')
@@ -228,7 +229,8 @@ def create_network(source_sequence, sos, eos,
     preds = infer_decoder_outputs.sample_id
   return loss, source_sequence, target_sequence_in, preds
 
-def create_train_op(loss, max_gradient, learning_rate):
+def create_train_op(loss, max_gradient, num_iterations,
+                    initial_learning_rate, decay_factor):
   # global_step = tf.Variable(0, trainable=False)
   global_step = tf.train.get_or_create_global_step()
 
@@ -238,6 +240,18 @@ def create_train_op(loss, max_gradient, learning_rate):
     params)
   clipped_gradients, _ = tf.clip_by_global_norm(
     gradients, max_gradient)
+
+  decay_start_step = num_iterations // 2
+  decay_steps = (num_iterations - decay_start_step) / 4
+
+  learning_rate = tf.cond(
+    global_step < decay_start_step,
+    lambda: initial_learning_rate,
+    lambda: tf.train.exponential_decay(
+      initial_learning_rate,
+      (global_step - decay_start_step),
+      decay_steps, decay_factor,
+      staircase=True))
 
   # TODO: Schedule learning_rate update
   opt = tf.train.AdamOptimizer(learning_rate)
@@ -267,7 +281,9 @@ loss, t_source_sequence, t_target_sequence_in, preds = create_network(
   FLAGS.encoder_num_layers, FLAGS.decoder_num_layers)
 
 global_step, train_op = create_train_op(loss, FLAGS.max_gradient,
-                                        FLAGS.learning_rate)
+                                        FLAGS.num_iterations,
+                                        FLAGS.learning_rate,
+                                        FLAGS.decay_factor)
 
 sess = tf.Session()
 

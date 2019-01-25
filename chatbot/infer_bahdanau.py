@@ -125,7 +125,6 @@ def create_network(source_sequence, sos, eos,
     maximum_iterations = tf.round(tf.reduce_max(source_sequence_length) * 2)
     infer_decoder_outputs, _, _ = tf.contrib.seq2seq.dynamic_decode(
       infer_decoder,
-      maximum_iterations=maximum_iterations,
       output_time_major=True,
       swap_memory=True)
     preds = infer_decoder_outputs.sample_id
@@ -162,8 +161,8 @@ latest_checkpoint = tf.train.latest_checkpoint('checkpoint_bahdanau')
 if latest_checkpoint and tf.train.checkpoint_exists(latest_checkpoint):
   saver.restore(sess, latest_checkpoint)
 
-print('>Chun: ', end='')
-raw_sequence = input()
+# print('>Chun: ', end='')
+raw_sequence = input('>Chun: ')
 while raw_sequence != 'Shut up!':
   raw_sequence = process_line(raw_sequence)
   raw_sequence = np.array([raw_sequence.split()])
@@ -175,5 +174,5 @@ while raw_sequence != 'Shut up!':
   print('>Bot:', pred_sent[:eos_index])
   print()
 
-  print('>Chun: ', end='')
-  raw_sequence = input()
+  # print('>Chun: ', end='')
+  raw_sequence = input('>Chun: ')
