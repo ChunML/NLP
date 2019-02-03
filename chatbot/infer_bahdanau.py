@@ -160,6 +160,7 @@ saver = tf.train.Saver()
 latest_checkpoint = tf.train.latest_checkpoint('checkpoint_bahdanau')
 if latest_checkpoint and tf.train.checkpoint_exists(latest_checkpoint):
   saver.restore(sess, latest_checkpoint)
+  print('Successfully loadedd checkpoint at', latest_checkpoint)
 
 # print('>Chun: ', end='')
 raw_sequence = input('>Chun: ')
