@@ -1,14 +1,4 @@
 ## Text Generation using RNN
 
-### Overview
-To Be Updated
-
-### Installation
-To Be Updated
-
-### Implementation Details
-To Be Updated
-
-### Reference
-- Udacity's Intro To RNN: [link](https://github.com/udacity/deep-learning/tree/master/intro-to-rnns)
-- Colah's Understanding LSTM Networks: [link](http://colah.github.io/posts/2015-08-Understanding-LSTMs/)
+### Details
+Details about the implementation can be found on my blog at [here](https://reactjsx.org/2019/02/01/text-generator-with-tensorflow/).
