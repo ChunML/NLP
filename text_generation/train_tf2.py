@@ -2,10 +2,9 @@ import os
 from collections import Counter
 import numpy as np
 import tensorflow as tf
-tf.enable_eager_execution()
 
 
-flags = tf.app.flags
+flags = tf.compat.v1.app.flags
 
 flags.DEFINE_string('train_file', 'oliver.txt', 'text file to train LSTM')
 flags.DEFINE_integer('seq_size', 32, 'sequence length')
@@ -44,15 +43,9 @@ def get_data_from_file(train_file, batch_size, seq_size):
     out_text = np.zeros_like(in_text)
     out_text[:-1] = in_text[1:]
     out_text[-1] = in_text[0]
-    in_text = np.reshape(in_text, (batch_size, -1))
-    out_text = np.reshape(out_text, (batch_size, -1))
+    in_text = np.reshape(in_text, (-1, seq_size))
+    out_text = np.reshape(out_text, (-1, seq_size))
     return int_to_vocab, vocab_to_int, n_vocab, in_text, out_text
-
-
-def get_batches(in_text, out_text, batch_size, seq_size):
-    num_batches = np.prod(in_text.shape) // (seq_size * batch_size)
-    for i in range(0, num_batches * seq_size, seq_size):
-        yield in_text[:, i:i+seq_size], out_text[:, i:i+seq_size]
 
 
 class RNNModule(tf.keras.Model):
@@ -61,7 +54,7 @@ class RNNModule(tf.keras.Model):
         self.lstm_size = lstm_size
         self.embedding = tf.keras.layers.Embedding(
             n_vocab, embedding_size)
-        self.lstm = tf.keras.layers.CuDNNLSTM(
+        self.lstm = tf.keras.layers.LSTM(
             lstm_size, return_state=True, return_sequences=True)
         self.dense = tf.keras.layers.Dense(n_vocab)
 
@@ -105,43 +98,50 @@ def predict(model, vocab_to_int, int_to_vocab, n_vocab):
     print(' '.join(words))
 
 
-def main(_):
+@tf.function
+def train_func(inputs, targets, model, state, loss_func, optimizer):
+  with tf.GradientTape() as tape:
+      logits, _, state = model(inputs, state)
+
+      loss = loss_func(targets, logits)
+
+      gradients = tape.gradient(loss, model.trainable_variables)
+      optimizer.apply_gradients(
+          zip(gradients, model.trainable_variables))
+      return loss
+
+    
+def main():
     int_to_vocab, vocab_to_int, n_vocab, in_text, out_text = \
         get_data_from_file(FLAGS.train_file, FLAGS.batch_size, FLAGS.seq_size)
+    
+    len_data = in_text.shape[0]
+    steps_per_epoch = len_data // FLAGS.batch_size
+    
+    dataset = tf.data.Dataset.from_tensor_slices((in_text, out_text)).shuffle(100)
+    dataset = dataset.batch(16, drop_remainder=True)
 
     model = RNNModule(n_vocab, FLAGS.embedding_size, FLAGS.lstm_size)
 
     state = model.zero_state(FLAGS.batch_size)
 
-    optimizer = tf.train.AdamOptimizer()
-
-    iteration = 0
+    optimizer = tf.keras.optimizers.Adam()
+    
+    loss_func = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
     for e in range(FLAGS.num_epochs):
         state = model.zero_state(FLAGS.batch_size)
-        batches = get_batches(
-            in_text, out_text, FLAGS.batch_size, FLAGS.seq_size)
 
-        for x, y in batches:
-            iteration += 1
+        for (batch, (inputs, targets)) in enumerate(dataset.take(steps_per_epoch)):
+            loss = train_func(inputs, targets, model, state, loss_func, optimizer)
 
-            x = tf.convert_to_tensor(x, dtype=tf.float32)
-
-            with tf.GradientTape() as tape:
-                logits, _, state = model(x, state)
-                loss = tf.losses.sparse_softmax_cross_entropy(y, logits)
-
-            gradients = tape.gradient(loss, model.trainable_variables)
-            optimizer.apply_gradients(
-                zip(gradients, model.trainable_variables))
-
-            if iteration % 100 == 0:
+            if batch % 100 == 0:
                 print('Epoch: {}/{}'.format(e, FLAGS.num_epochs),
-                      'Iteration: {}'.format(iteration),
+                      'Batch: {}'.format(batch),
                       'Loss: {}'.format(loss.numpy()))
-
-            if iteration % 1000 == 0:
+                
+            if batch % 300 == 0:
                 predict(model, vocab_to_int, int_to_vocab, n_vocab)
 
 
 if __name__ == '__main__':
-    tf.app.run()
+    main()
