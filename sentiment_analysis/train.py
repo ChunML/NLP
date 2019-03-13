@@ -28,33 +28,33 @@ model = tf.keras.Sequential([
 loss_func = tf.keras.losses.BinaryCrossentropy(from_logits=True)
 optimizer = tf.keras.optimizers.Adam()
 for e in range(10):
-  accuracy = []
-  for batch, (text, label) in enumerate(train_data.take(-1)):
-    with tf.GradientTape() as tape:
-      logits = model(text)
-      label = tf.expand_dims(label, 1)
-      loss = loss_func(label, logits)
+    accuracy = []
+    for batch, (text, label) in enumerate(train_data.take(-1)):
+        with tf.GradientTape() as tape:
+            logits = model(text)
+            label = tf.expand_dims(label, 1)
+            loss = loss_func(label, logits)
 
-    gradients = tape.gradient(loss, model.trainable_variables)
-    grads_and_vars = zip(gradients, model.trainable_variables)
-    optimizer.apply_gradients(grads_and_vars)
-    predictions = tf.cast(tf.math.greater(logits, 0.5), tf.int64)
-    accuracy.extend(tf.cast(tf.equal(predictions, label), tf.int64).numpy())
+        gradients = tape.gradient(loss, model.trainable_variables)
+        grads_and_vars = zip(gradients, model.trainable_variables)
+        optimizer.apply_gradients(grads_and_vars)
+        predictions = tf.cast(tf.math.greater(logits, 0.5), tf.int64)
+        accuracy.extend(tf.cast(tf.equal(predictions, label), tf.int64).numpy())
 
-    if batch % 100 == 0:
-      print('\nEpoch: {} - Batch: {}'.format(e, batch))
-      print('Loss: {:.4f}'.format(loss.numpy()))
-      print('Accuracy: {}'.format(np.mean(accuracy)))
+        if batch % 100 == 0:
+            print('\nEpoch: {} - Batch: {}'.format(e, batch))
+            print('Loss: {:.4f}'.format(loss.numpy()))
+            print('Accuracy: {}'.format(np.mean(accuracy)))
       
-      for _, (text, label) in enumerate(test_data.take(1)):
-        logits = model(text)
+            for _, (text, label) in enumerate(test_data.take(1)):
+                logits = model(text)
         
-        random_id = np.random.choice(label.shape[0], 5)
-        for ix in random_id:
-          print('\n')
-          print(tokenizer.decode(text.numpy()[ix]))
-          print('Label', u'\u2713' if label.numpy()[ix] == 1 else u'\u2715')
-          print('Pred', u'\u2713' if logits.numpy()[ix][0] >= 0.5 else u'\u2715')
+                random_id = np.random.choice(label.shape[0], 5)
+                for ix in random_id:
+                    print('\n')
+                    print(tokenizer.decode(text.numpy()[ix]))
+                    print('Label', u'\u2713' if label.numpy()[ix] == 1 else u'\u2715')
+                    print('Pred', u'\u2713' if logits.numpy()[ix][0] >= 0.5 else u'\u2715')
           
           
 test_text = "I caught this movie the other night on one of the movie channels and I haven't laughed that hard in a long time."
