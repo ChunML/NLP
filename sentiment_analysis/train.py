@@ -38,7 +38,7 @@ for e in range(10):
         gradients = tape.gradient(loss, model.trainable_variables)
         grads_and_vars = zip(gradients, model.trainable_variables)
         optimizer.apply_gradients(grads_and_vars)
-        predictions = tf.cast(tf.math.greater(logits, 0.5), tf.int64)
+        predictions = tf.cast(tf.math.greater(tf.sigmoid(logits), 0.5), tf.int64)
         accuracy.extend(tf.cast(tf.equal(predictions, label), tf.int64).numpy())
 
         if batch % 100 == 0:
