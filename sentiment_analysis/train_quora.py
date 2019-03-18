@@ -112,8 +112,8 @@ for e in range(NUM_EPOCHS):
         
         if batch % 500 == 0:
             model.save_weights('epoch_{}_batch_{}.h5'.format(e + 1, batch)
-            val_f1_score = 0.0
-            val_accuracy = 0.0
+            val_f1_score = []
+            val_accuracy = []
             for batch, (inputs, targets) in enumerate(val_dataset.take(2)):
                 val_logits = model(inputs)
                 predictions = tf.cast(tf.math.greater_equal(tf.sigmoid(val_logits), 0.5), tf.int64)
@@ -121,11 +121,32 @@ for e in range(NUM_EPOCHS):
                 f1_score, _, _ = compute_f1(predictions, targets)
                 accuracy = compute_accuracy(predictions, targets)
                 
-                val_f1_score = (val_f1_score + f1_score) / (batch + 1)
-                val_accuracy = (val_accuracy + accuracy) / (batch + 1)
+                val_f1_score.append(f1_score.numpy())
+                val_accuracy.append(accuracy.numpy())
 
             print('=========================Validation============================')
             print('Predictions', predictions.numpy()[:30, 0])
             print('Target     ', targets.numpy()[:30, 0])
             print('Epoch {} Loss {:.4f} Accuracy {:.4f} F1 {:.4f}\n'.format(
-                e + 1, loss.numpy(), val_accuracy.numpy(), val_f1_score.numpy()))
+                e + 1, loss.numpy(), np.nanmean(val_accuracy), np.nanmean(val_f1_score)))
+                               
+val_f1_score = []
+val_accuracy = []
+for batch, (inputs, targets) in enumerate(val_dataset.take(-1)):
+    val_logits = model(inputs)
+    predictions = tf.cast(tf.math.greater_equal(tf.sigmoid(val_logits), 0.5), tf.int64)
+    
+    f1_score, _, _ = compute_f1(predictions, targets)
+    accuracy = compute_accuracy(predictions, targets)
+    
+    val_f1_score.append(f1_score.numpy())
+    val_accuracy.append(accuracy.numpy())
+    
+    if batch % 100 == 0:
+        print('=========================Validation============================')
+        print('Predictions', predictions.numpy()[:30, 0])
+        print('Target     ', targets.numpy()[:30, 0])
+        print('Batch {} Loss {:.4f} Accuracy {:.4f} F1 {:.4f}\n'.format(
+            batch, loss.numpy(), 
+            np.nanmean(val_accuracy), 
+            np.nanmean(val_f1_score)))
