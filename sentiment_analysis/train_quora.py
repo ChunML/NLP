@@ -150,3 +150,10 @@ for batch, (inputs, targets) in enumerate(val_dataset.take(-1)):
             batch, loss.numpy(), 
             np.nanmean(val_accuracy), 
             np.nanmean(val_f1_score)))
+
+        random_ix = np.random.choice(inputs.shape[0], 5)
+        for ix in random_ix:
+            question = [tokenizer.index_word[int_word] for int_word in inputs[ix].numpy() if int_word != 0]
+            print(' '.join(question))
+            print('Label', u'\u2713' if targets.numpy()[ix, 0] == 1 else u'\u2715')
+            print('Pred', u'\u2713' if predictions.numpy()[ix, 0] == 1 else u'\u2715')
