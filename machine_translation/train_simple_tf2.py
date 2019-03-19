@@ -113,38 +113,32 @@ fr_vocab_size = len(fr_tokenizer.word_index) + 1
 decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, LSTM_SIZE)
 
 def loss_func(targets, logits):
-    logits = tf.squeeze(logits, 1)
     crossentropy = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    mask = tf.math.logical_not(tf.math.equal(logits, 0))
-    loss = crossentropy(targets, logits)
-    mask = tf.cast(mask, dtype=loss.dtype)
-    loss *= mask
+    mask = tf.math.logical_not(tf.math.equal(targets, 0))
+    mask = tf.cast(mask, dtype=tf.int64)
+    loss = crossentropy(targets, logits, sample_weight=mask)
     
-    return tf.reduce_mean(loss)
+    return loss
 
 optimizer = tf.keras.optimizers.Adam()
 
-@tf.function
+# @tf.function
 def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     loss = 0
     with tf.GradientTape() as tape:
         en_outputs = encoder(source_seq, en_initial_states)
         en_states = en_outputs[1:]
         de_states = en_states
-
-        for i in range(data_fr_out.shape[1]):
-            de_outputs = decoder(tf.expand_dims(target_seq_in[:, i], 1), de_states)
         
-            logits = de_outputs[0]
-            de_states = de_outputs[1:]
-        
-            loss += loss_func(target_seq_out[:, i], logits)
+        de_outputs = decoder(target_seq_in, de_states)
+        logits = de_outputs[0]
+        loss = loss_func(target_seq_out, logits)
 
     variables = encoder.trainable_variables + decoder.trainable_variables
     gradients = tape.gradient(loss, variables)
     optimizer.apply_gradients(zip(gradients, variables))
     
-    return loss / data_fr_out.shape[1]
+    return loss
 
 NUM_EPOCHS = 300
 BATCH_SIZE = 5
