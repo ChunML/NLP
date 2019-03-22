@@ -47,9 +47,9 @@ def normalize_string(s):
 
 raw_data_en, raw_data_fr = list(zip(*raw_data))
 raw_data_en, raw_data_fr = list(raw_data_en), list(raw_data_fr)
-raw_data_en = ['<start> ' + data + ' <end>' for data in raw_data_en]
-raw_data_fr_in = ['<start> ' + data for data in raw_data_fr]
-raw_data_fr_out = [data + ' <end>' for data in raw_data_fr]
+raw_data_en = ['<start> ' + normalize_string(data) + ' <end>' for data in raw_data_en]
+raw_data_fr_in = ['<start> ' + normalize_string(data) for data in raw_data_fr]
+raw_data_fr_out = [normalize_string(data) + ' <end>' for data in raw_data_fr]
 
 en_tokenizer = tf.keras.preprocessing.text.Tokenizer(1000, filters='')
 en_tokenizer.fit_on_texts(raw_data_en)
@@ -137,6 +137,31 @@ def loss_func(targets, logits):
 optimizer = tf.keras.optimizers.Adam()
 
 
+def predict():
+    test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
+    print(test_source_text)
+    test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
+    print(test_source_seq)
+
+    en_initial_states = encoder.init_states(1)
+    en_outputs = encoder(tf.constant(test_source_seq), en_initial_states)
+
+    de_input = tf.constant([[fr_tokenizer.word_index['<start>']]])
+    de_state_h, de_state_c = en_outputs[1:]
+    out_words = []
+
+    while True:
+        de_output, de_state_h, de_state_c = decoder(
+            de_input, (de_state_h, de_state_c))
+        de_input = tf.argmax(de_output, -1)
+        out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
+
+        if out_words[-1] == '<end>' or len(out_words) >= 20:
+            break
+
+    print(' '.join(out_words))
+
+
 @tf.function
 def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     loss = 0
@@ -160,32 +185,14 @@ NUM_EPOCHS = 300
 BATCH_SIZE = 5
 
 for e in range(NUM_EPOCHS):
+    en_initial_states = encoder.init_states(BATCH_SIZE)
+    
+    predict()
+
     for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
-        en_initial_states = encoder.init_states(BATCH_SIZE)
         loss = train_step(source_seq, target_seq_in,
                           target_seq_out, en_initial_states)
 
     print('Epoch {} Loss {:.4f}'.format(e + 1, loss.numpy()))
 
-test_source_text = raw_data_en[np.random.choice(20)]
-print(test_source_text)
-test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
-print(test_source_seq)
-
-en_initial_states = encoder.init_states(1)
-en_outputs = encoder(tf.constant(test_source_seq), en_initial_states)
-
-de_input = tf.constant([[fr_tokenizer.word_index['<start>']]])
-de_state_h, de_state_c = en_outputs[1:]
-out_words = []
-
-while True:
-    de_output, de_state_h, de_state_c = decoder(
-        de_input, (de_state_h, de_state_c))
-    de_input = tf.argmax(de_output, -1)
-    out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
-
-    if out_words[-1] == '<end>':
-        break
-
-print(' '.join(out_words))
+predict()
