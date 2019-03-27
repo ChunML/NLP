@@ -1,12 +1,10 @@
-# -*- coding: utf-8 -*-
-
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import numpy as np
 import re
 import unicodedata
 
-with open('../data/eng_fra.txt') as f:
+with open('./eng-fra.txt') as f:
     lines = f.read()
 
 raw_data = []
@@ -15,31 +13,6 @@ for line in lines.split('\n'):
 
 print(raw_data[-5:])
 raw_data = raw_data[:-1]
-
-'''
-raw_data = (
-    ('What a ridiculous concept!', 'Quel concept ridicule !'),
-    ('What about his girlfriend?', "Qu'en est-il de sa copine ?"),
-    ('What an inspiring speaker!', 'Quel brillant orateur !'),
-    ('What he did is very wrong.', "Ce qu'il a fait est très mal."),
-    ('What time did you wake up?', "À quelle heure t'es-tu réveillé ?"),
-    ('When do you go on holiday?', "Quand pars-tu en vacances ?"),
-    ('Who else knows the answer?', "Qui d'autre connaît la réponse ?"),
-    ('He got up earlier than usual.', "Il s'est levé plus tôt que d'habitude."),
-    ('He is the oldest of them all.', "C'est le plus vieux d'entre eux."),
-    ('He left school two weeks ago.', "Il a obtenu son diplôme de fin d'année il y a 2 semaines."),
-    ('He reached Kyoto on Saturday.', "Il est arrivé samedi à Kyoto."),
-    ('He refused my friend request.', "Il a refusé ma demande pour devenir amis."),
-    ('He refused to take the bribe.', "Il s'est refusé à prendre le pot-de-vin."),
-    ('He studied the way birds fly.', "Il étudiait la manière dont les oiseaux volent."),
-    ('He wondered why she did that.', "Il se demanda pourquoi elle avait fait cela."),
-    ('Health is better than wealth.', "La santé est plus importante que la richesse."),
-    ('Her face suddenly turned red.', "Son visage vira soudain au rouge."),
-    ('His ideas conflict with mine.', "Ses idées rentrent en conflit avec les miennes."),
-    ('I advised Tom not to do that.', "J'ai conseillé à Tom de ne pas faire cela."),
-    ("I didn't know you were that good at French.", "J'ignorais que vous étiez aussi bonnes en français.")
-)
-'''
 
 
 def unicode_to_ascii(s):
@@ -57,22 +30,21 @@ def normalize_string(s):
     return s
 
 
-raw_data_en = list(map(lambda x: x[0], raw_data))
-raw_data_fr = list(map(lambda x: x[1], raw_data))
-raw_data_en = ['<start> ' + data + ' <end>' for data in raw_data_en]
-raw_data_fr_in = ['<start> ' + data for data in raw_data_fr]
-raw_data_fr_out = [data + ' <end>' for data in raw_data_fr]
+raw_data_en, raw_data_fr = zip(*raw_data)
+raw_data_en = [normalize_string(data) for data in raw_data_en]
+raw_data_fr_in = ['<start> ' + normalize_string(data) for data in raw_data_fr]
+raw_data_fr_out = [normalize_string(data) + ' <end>' for data in raw_data_fr]
 
 print(raw_data_fr_out[-5:])
 
-en_tokenizer = tf.keras.preprocessing.text.Tokenizer(1000, filters='')
+en_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 en_tokenizer.fit_on_texts(raw_data_en)
 data_en = en_tokenizer.texts_to_sequences(raw_data_en)
 data_en = tf.keras.preprocessing.sequence.pad_sequences(data_en,
                                                         padding='post')
 print(data_en[:2])
 
-fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(1000, filters='')
+fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 fr_tokenizer.fit_on_texts(raw_data_fr_in)
 fr_tokenizer.fit_on_texts(raw_data_fr_out)
 data_fr_in = fr_tokenizer.texts_to_sequences(raw_data_fr_in)
@@ -85,7 +57,7 @@ data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
 print(data_fr_out[:2])
 
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 EMBEDDING_SIZE = 256
 LSTM_SIZE = 512
 
@@ -140,10 +112,6 @@ class Decoder(tf.keras.Model):
 
         return logits, state_h, state_c
 
-    def init_states(self, batch_size):
-        return (tf.zeros([batch_size, self.lstm_size]),
-                tf.zeros([batch_size, self.lstm_size]))
-
 
 fr_vocab_size = len(fr_tokenizer.word_index) + 1
 decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, LSTM_SIZE)
@@ -164,7 +132,7 @@ def loss_func(targets, logits):
     return loss
 
 
-optimizer = tf.keras.optimizers.Adam()
+optimizer = tf.keras.optimizers.Adam(clipnorm=5.0)
 
 
 @tf.function
@@ -186,9 +154,10 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     return loss
 
 
-def predict():
-    test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
-    print(test_source_text)
+def predict(test_source_text=None):
+    if test_source_text is None:
+        test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
+        print(test_source_text)
     test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
     print(test_source_seq)
 
@@ -211,43 +180,21 @@ def predict():
     print(' '.join(out_words))
 
 
-NUM_EPOCHS = 30
+NUM_EPOCHS = 15
 
-encoder.load_weights('checkpoints/encoder_30.h5')
-decoder.load_weights('checkpoints/decoder_30.h5')
 
 for e in range(NUM_EPOCHS):
     en_initial_states = encoder.init_states(BATCH_SIZE)
-    encoder.save_weights('checkpoints/encoder_{}.h5'.format(e + 1))
-    decoder.save_weights('checkpoints/decoder_{}.h5'.format(e + 1))
-
-    predict()
 
     for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
         loss = train_step(source_seq, target_seq_in, target_seq_out, en_initial_states)
         
         if batch % 100 == 0:
             print('Epoch {} Batch {} Loss {:.4f}'.format(e + 1, batch, loss.numpy()))
-
-test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
-print(test_source_text)
-test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
-print(test_source_seq)
-
-en_initial_states = encoder.init_states(1)
-en_outputs = encoder(tf.constant(test_source_seq), en_initial_states)
-
-de_input = tf.constant([[fr_tokenizer.word_index['<start>']]])
-de_state_h, de_state_c = en_outputs[1:]
-out_words = []
-
-while True:
-    de_output, de_state_h, de_state_c = decoder(
-        de_input, (de_state_h, de_state_c))
-    de_input = tf.argmax(de_output, -1)
-    out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
-
-    if out_words[-1] == '<end>' or len(out_words) >= 20:
-        break
-
-print(' '.join(out_words))
+    
+    try:
+        predict()
+        
+        predict("How are you today ?")
+    except Exception:
+        continue
