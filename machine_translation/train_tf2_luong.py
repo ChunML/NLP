@@ -33,8 +33,7 @@ def normalize_string(s):
 
 
 raw_data_en, raw_data_fr = list(zip(*raw_data))
-raw_data_en, raw_data_fr = list(raw_data_en), list(raw_data_fr)
-raw_data_en = ['<start> ' + normalize_string(data) + ' <end>' for data in raw_data_en]
+raw_data_en = [normalize_string(data) for data in raw_data_en]
 raw_data_fr_in = ['<start> ' + normalize_string(data) for data in raw_data_fr]
 raw_data_fr_out = [normalize_string(data) + ' <end>' for data in raw_data_fr]
 
@@ -62,7 +61,7 @@ print(data_fr_out[:2])
 
 BATCH_SIZE = 64
 EMBEDDING_SIZE = 256
-RNN_SIZE = 512
+RNN_SIZE = 1024
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -75,17 +74,18 @@ class Encoder(tf.keras.Model):
         super(Encoder, self).__init__()
         self.rnn_size = rnn_size
         self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size)
-        self.gru = tf.keras.layers.GRU(
+        self.lstm = tf.keras.layers.LSTM(
             rnn_size, return_sequences=True, return_state=True)
 
     def call(self, sequence, states):
         embed = self.embedding(sequence)
-        output, state = self.gru(embed, initial_state=states)
+        output, state_h, state_c = self.lstm(embed, initial_state=states)
 
-        return output, state
+        return output, state_h, state_c
 
     def init_states(self, batch_size):
-        return tf.zeros([batch_size, self.rnn_size])
+        return (tf.zeros([batch_size, self.rnn_size]),
+                tf.zeros([batch_size, self.rnn_size]))
 
 
 en_vocab_size = len(en_tokenizer.word_index) + 1
@@ -94,12 +94,13 @@ encoder = Encoder(en_vocab_size, EMBEDDING_SIZE, RNN_SIZE)
 
 
 class LuongAttention(tf.keras.Model):
-    def __init__(self):
+    def __init__(self, rnn_size):
         super(LuongAttention, self).__init__()
+        self.wa = tf.keras.layers.Dense(rnn_size)
 
     def call(self, decoder_output, encoder_output):
         # Dot score: h_t (dot) h_s
-        score = tf.matmul(decoder_output, encoder_output, transpose_b=True)
+        score = tf.matmul(decoder_output, self.wa(encoder_output), transpose_b=True)
 
         # alignment a_t
         alignment = tf.nn.softmax(score, axis=2)
@@ -113,17 +114,17 @@ class LuongAttention(tf.keras.Model):
 class Decoder(tf.keras.Model):
     def __init__(self, vocab_size, embedding_size, rnn_size):
         super(Decoder, self).__init__()
-        self.attention = LuongAttention()
+        self.attention = LuongAttention(rnn_size)
         self.rnn_size = rnn_size
         self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size)
-        self.gru = tf.keras.layers.GRU(
+        self.lstm = tf.keras.layers.LSTM(
             rnn_size, return_sequences=True, return_state=True)
         self.wc = tf.keras.layers.Dense(rnn_size, activation='tanh')
         self.ws = tf.keras.layers.Dense(vocab_size)
 
     def call(self, sequence, state, encoder_output):
         embed = self.embedding(sequence)
-        lstm_out, state = self.gru(embed, initial_state=state)
+        lstm_out, state_h, state_c = self.lstm(embed, initial_state=state)
         context, alignment = self.attention(lstm_out, encoder_output)
 
         # concat context and decoder_output
@@ -131,7 +132,7 @@ class Decoder(tf.keras.Model):
         lstm_out = self.wc(lstm_out)
         logits = self.ws(lstm_out)
 
-        return logits, state, alignment
+        return logits, state_h, state_c, alignment
 
     def init_states(self, batch_size):
         return tf.zeros([batch_size, self.lstm_size])
@@ -153,11 +154,12 @@ def loss_func(targets, logits):
     return loss
 
 
-optimizer = tf.keras.optimizers.Adam()
+optimizer = tf.keras.optimizers.Adam(clipnorm=5.0)
 
 
-def predict():
-    test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
+def predict(test_source_text=None):
+    if test_source_text is None:
+        test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
     print(test_source_text)
     test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
     print(test_source_seq)
@@ -166,12 +168,12 @@ def predict():
     en_outputs = encoder(tf.constant(test_source_seq), en_initial_states)
 
     de_input = tf.constant([[fr_tokenizer.word_index['<start>']]])
-    de_state = en_outputs[1:]
+    de_state_h, de_state_c = en_outputs[1:]
     out_words = []
 
     while True:
-        de_output, de_state, alignment = decoder(
-            de_input, de_state, en_outputs[0])
+        de_output, de_state_h, de_state_c, alignment = decoder(
+            de_input, (de_state_h, de_state_c), en_outputs[0])
         de_input = tf.expand_dims(tf.argmax(de_output, -1), 0)
         out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
 
@@ -187,12 +189,12 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     with tf.GradientTape() as tape:
         en_outputs = encoder(source_seq, en_initial_states)
         en_states = en_outputs[1:]
-        de_state = en_states
+        de_state_h, de_state_c = en_states
 
         for i in range(target_seq_out.shape[1]):
             decoder_in = tf.expand_dims(target_seq_in[:, i], 1)
-            logit, de_state, _ = decoder(
-                decoder_in, de_state, en_outputs[0])
+            logit, de_state_h, de_state_c, _ = decoder(
+                decoder_in, (de_state_h, de_state_c), en_outputs[0])
             loss += loss_func(target_seq_out[:, i], logit)
 
     variables = encoder.trainable_variables + decoder.trainable_variables
@@ -202,10 +204,11 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     return loss / target_seq_out.shape[1]
 
 
-NUM_EPOCHS = 30
+NUM_EPOCHS = 15
 
-# encoder.load_weights('checkpoints_luong/encoder_30.h5')
-# decoder.load_weights('checkpoints_luong/decoder_30.h5')
+
+# encoder.load_weights('checkpoints_luong/encoder_15.h5')
+# decoder.load_weights('checkpoints_luong/decoder_15.h5')
 
 for e in range(NUM_EPOCHS):
     en_initial_states = encoder.init_states(BATCH_SIZE)
@@ -220,7 +223,8 @@ for e in range(NUM_EPOCHS):
 
     try:
         predict()
+
+        predict("How are you today ?")
     except Exception:
         continue
 
-predict()

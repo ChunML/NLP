@@ -4,7 +4,7 @@ import numpy as np
 import re
 import unicodedata
 
-with open('./eng-fra.txt') as f:
+with open('../data/eng_fra.txt') as f:
     lines = f.read()
 
 raw_data = []
@@ -59,7 +59,7 @@ print(data_fr_out[:2])
 
 BATCH_SIZE = 64
 EMBEDDING_SIZE = 256
-LSTM_SIZE = 512
+LSTM_SIZE = 1024
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -185,6 +185,8 @@ NUM_EPOCHS = 15
 
 for e in range(NUM_EPOCHS):
     en_initial_states = encoder.init_states(BATCH_SIZE)
+    encoder.save_weights('checkpoints/encoder_{}.h5'.format(e + 1))
+    decoder.save_weights('checkpoints/decoder_{}.h5'.format(e + 1))
 
     for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
         loss = train_step(source_seq, target_seq_in, target_seq_out, en_initial_states)
