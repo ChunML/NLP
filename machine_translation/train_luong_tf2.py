@@ -5,6 +5,9 @@ import tensorflow_datasets as tfds
 import numpy as np
 import unicodedata
 import re
+import matplotlib.pyplot as plt
+import os
+import imageio
 
 with open('../data/eng_fra.txt') as f:
     lines = f.read()
@@ -170,17 +173,21 @@ def predict(test_source_text=None):
     de_input = tf.constant([[fr_tokenizer.word_index['<start>']]])
     de_state_h, de_state_c = en_outputs[1:]
     out_words = []
+    alignments = []
 
     while True:
         de_output, de_state_h, de_state_c, alignment = decoder(
             de_input, (de_state_h, de_state_c), en_outputs[0])
         de_input = tf.expand_dims(tf.argmax(de_output, -1), 0)
         out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
+        
+        alignments.append(alignment.numpy())
 
         if out_words[-1] == '<end>' or len(out_words) >= 20:
             break
 
     print(' '.join(out_words))
+    return np.array(alignments), test_source_text.split(' '), out_words
 
 
 @tf.function
@@ -210,6 +217,9 @@ NUM_EPOCHS = 15
 # encoder.load_weights('checkpoints_luong/encoder_15.h5')
 # decoder.load_weights('checkpoints_luong/decoder_15.h5')
 
+if not os.path.exists('checkpoints_luong'):
+    os.makedirs('checkpoints_luong')
+
 for e in range(NUM_EPOCHS):
     en_initial_states = encoder.init_states(BATCH_SIZE)
     encoder.save_weights('checkpoints_luong/encoder_{}.h5'.format(e + 1))
@@ -228,3 +238,33 @@ for e in range(NUM_EPOCHS):
     except Exception:
         continue
 
+        
+if not os.path.exists('heatmap'):
+    os.makedirs('heatmap')
+
+test_sequence = input()
+num_tested = 1
+filenames = []
+
+while test_sequence != 'q':
+    test_sequence = normalize_data(test_sequence)
+    alignments, source, prediction = predict(test_sequence)
+    attention = np.squeeze(alignments, (1, 2))
+    fig = plt.figure(figsize=(10,10))
+    ax = fig.add_subplot(1, 1, 1)
+    ax.matshow(attention, cmap='viridis')
+    ax.set_xticklabels([''] + source)
+    ax.set_yticklabels([''] + prediction)
+    
+    filenames.append('heatmap/test_{}.png')
+    plt.savefig('heatmap/test_{}.png')
+    plt.close()
+    
+    num_tested += 1
+
+    test_sequence = input()
+
+with imageio.get_writer('translation_heatmaps.gif', mode='I', duration=0.8) as writer:
+    for filename in filenames:
+        image = imageio.imread(filename)
+        writer.append_data(image)
