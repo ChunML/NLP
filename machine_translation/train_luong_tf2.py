@@ -17,6 +17,7 @@ for line in lines.split('\n'):
     raw_data.append(line.split('\t'))
 
 print(raw_data[-5:])
+# The last element is empty, so omit it
 raw_data = raw_data[:-1]
 
 
@@ -40,14 +41,12 @@ raw_data_en = [normalize_string(data) for data in raw_data_en]
 raw_data_fr_in = ['<start> ' + normalize_string(data) for data in raw_data_fr]
 raw_data_fr_out = [normalize_string(data) + ' <end>' for data in raw_data_fr]
 
-print(raw_data_fr_out[-5:])
-
 en_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 en_tokenizer.fit_on_texts(raw_data_en)
 data_en = en_tokenizer.texts_to_sequences(raw_data_en)
 data_en = tf.keras.preprocessing.sequence.pad_sequences(data_en,
                                                         padding='post')
-print(data_en[:2])
+print('English sequences', data_en[:2])
 
 fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 fr_tokenizer.fit_on_texts(raw_data_fr_in)
@@ -55,16 +54,16 @@ fr_tokenizer.fit_on_texts(raw_data_fr_out)
 data_fr_in = fr_tokenizer.texts_to_sequences(raw_data_fr_in)
 data_fr_in = tf.keras.preprocessing.sequence.pad_sequences(data_fr_in,
                                                            padding='post')
-print(data_fr_in[:2])
+print('French input sequences', data_fr_in[:2])
 
 data_fr_out = fr_tokenizer.texts_to_sequences(raw_data_fr_out)
 data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
-print(data_fr_out[:2])
+print('French output sequences', data_fr_out[:2])
 
 BATCH_SIZE = 64
 EMBEDDING_SIZE = 256
-RNN_SIZE = 1024
+RNN_SIZE = 512
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -137,22 +136,22 @@ class Decoder(tf.keras.Model):
 
         return logits, state_h, state_c, alignment
 
-    def init_states(self, batch_size):
-        return tf.zeros([batch_size, self.lstm_size])
-
 
 fr_vocab_size = len(fr_tokenizer.word_index) + 1
 decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, RNN_SIZE)
 
+# These lines can be used for debugging purpose
+# Or can be seen as a way to build the models
+initial_state = encoder.init_states(1)
+encoder_outputs = encoder(tf.constant([[1]]), initial_state)
+decoder_outputs = decoder(tf.constant([[1]]), encoder_outputs[1:], encoder_outputs[0])
 
 def loss_func(targets, logits):
     crossentropy = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
-    loss = crossentropy(targets, logits)
     mask = tf.math.logical_not(tf.math.equal(targets, 0))
-    mask = tf.cast(mask, dtype=loss.dtype)
-
-    loss = tf.reduce_mean(loss * mask)
+    mask = tf.cast(mask, dtype=tf.int64)
+    loss = crossentropy(targets, logits, sample_weight=mask)
 
     return loss
 
@@ -213,7 +212,7 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
 
 NUM_EPOCHS = 15
 
-
+# Uncomment these lines for inference mode
 # encoder.load_weights('checkpoints_luong/encoder_15.h5')
 # decoder.load_weights('checkpoints_luong/decoder_15.h5')
 
@@ -242,29 +241,45 @@ for e in range(NUM_EPOCHS):
 if not os.path.exists('heatmap'):
     os.makedirs('heatmap')
 
-test_sequence = input()
-num_tested = 1
+test_sents = (
+    'What a ridiculous concept!',
+    'Your idea is not entirely crazy.',
+    "A man's worth lies in what he is.",
+    'What he did is very wrong.',
+    "All three of you need to do that.",
+    "Are you giving me another chance?",
+    "Both Tom and Mary work as models.",
+    "Can I have a few minutes, please?",
+    "Could you close the door, please?",
+    "Did you plant pumpkins this year?",
+    "Do you ever study in the library?",
+    "Don't be deceived by appearances.",
+    "Excuse me. Can you speak English?",
+    "Few people know the true meaning.",
+    "Germany produced many scientists.",
+    "Guess whose birthday it is today.",
+    "He acted like he owned the place.",
+    "Honesty will pay in the long run.",
+    "How do we know this isn't a trap?",
+    "I can't believe you're giving up.",
+)
 filenames = []
 
-while test_sequence != 'q':
+for test_sent in test_sents:
     test_sequence = normalize_data(test_sequence)
     alignments, source, prediction = predict(test_sequence)
     attention = np.squeeze(alignments, (1, 2))
     fig = plt.figure(figsize=(10,10))
     ax = fig.add_subplot(1, 1, 1)
     ax.matshow(attention, cmap='viridis')
-    ax.set_xticklabels([''] + source)
+    ax.set_xticklabels([''] + source, rotation=90)
     ax.set_yticklabels([''] + prediction)
     
     filenames.append('heatmap/test_{}.png')
     plt.savefig('heatmap/test_{}.png')
     plt.close()
-    
-    num_tested += 1
 
-    test_sequence = input()
-
-with imageio.get_writer('translation_heatmaps.gif', mode='I', duration=0.8) as writer:
+with imageio.get_writer('translation_heatmaps.gif', mode='I', duration=2) as writer:
     for filename in filenames:
         image = imageio.imread(filename)
         writer.append_data(image)
