@@ -46,7 +46,8 @@ en_tokenizer.fit_on_texts(raw_data_en)
 data_en = en_tokenizer.texts_to_sequences(raw_data_en)
 data_en = tf.keras.preprocessing.sequence.pad_sequences(data_en,
                                                         padding='post')
-print('English sequences', data_en[:2])
+print('English sequences')
+print(data_en[:2])
 
 fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 fr_tokenizer.fit_on_texts(raw_data_fr_in)
@@ -54,16 +55,22 @@ fr_tokenizer.fit_on_texts(raw_data_fr_out)
 data_fr_in = fr_tokenizer.texts_to_sequences(raw_data_fr_in)
 data_fr_in = tf.keras.preprocessing.sequence.pad_sequences(data_fr_in,
                                                            padding='post')
-print('French input sequences', data_fr_in[:2])
+print('French input sequences')
+print(data_fr_in[:2])
 
 data_fr_out = fr_tokenizer.texts_to_sequences(raw_data_fr_out)
 data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
-print('French output sequences', data_fr_out[:2])
+print('French output sequences')
+print(data_fr_out[:2])
 
 BATCH_SIZE = 64
 EMBEDDING_SIZE = 256
 RNN_SIZE = 512
+
+# Set the score function to compute alignment vectors
+# Can choose between 'dot', 'general' or 'concat'
+ATTENTION_FUNC = 'general'
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -96,27 +103,64 @@ encoder = Encoder(en_vocab_size, EMBEDDING_SIZE, RNN_SIZE)
 
 
 class LuongAttention(tf.keras.Model):
-    def __init__(self, rnn_size):
+    def __init__(self, rnn_size, attention_func):
         super(LuongAttention, self).__init__()
-        self.wa = tf.keras.layers.Dense(rnn_size)
+        self.attention_func = attention_func
+
+        if attention_func not in ['dot', 'general', 'concat']:
+            raise ValueError(
+                'Unknown attention score function! Must be either dot, general or concat.')
+
+        if attention_func == 'general':
+            # General score function
+            self.wa = tf.keras.layers.Dense(rnn_size)
+        elif attention_func == 'concat':
+            # Concat score function
+            self.wa = tf.keras.layers.Dense(rnn_size, activation='tanh')
+            self.va = tf.keras.layers.Dense(1)
 
     def call(self, decoder_output, encoder_output):
-        # Dot score: h_t (dot) h_s
-        score = tf.matmul(decoder_output, self.wa(encoder_output), transpose_b=True)
+        if self.attention_func == 'dot':
+            # Dot score function: decoder_output (dot) encoder_output
+            # decoder_output has shape: (batch_size, 1, rnn_size)
+            # encoder_output has shape: (batch_size, max_len, rnn_size)
+            # => score has shape: (batch_size, 1, max_len)
+            score = tf.matmul(decoder_output, encoder_output, transpose_b=True)
+        elif self.attention_func == 'general':
+            # General score function: decoder_output (dot) (Wa (dot) encoder_output)
+            # decoder_output has shape: (batch_size, 1, rnn_size)
+            # encoder_output has shape: (batch_size, max_len, rnn_size)
+            # => score has shape: (batch_size, 1, max_len)
+            score = tf.matmul(decoder_output, self.wa(
+                encoder_output), transpose_b=True)
+        elif self.attention_func == 'concat':
+            # Concat score function: va (dot) tanh(Wa (dot) concat(decoder_output + encoder_output))
+            # Decoder output must be broadcasted to encoder output's shape first
+            decoder_output = tf.tile(
+                decoder_output, [1, encoder_output.shape[1], 1])
 
-        # alignment a_t
+            # Concat => Wa => va
+            # (batch_size, max_len, 2 * rnn_size) => (batch_size, max_len, rnn_size) => (batch_size, max_len, 1)
+            score = self.va(
+                self.wa(tf.concat((decoder_output, encoder_output), axis=-1)))
+
+            # Transpose score vector to have the same shape as other two above
+            # (batch_size, max_len, 1) => (batch_size, 1, max_len)
+            score = tf.transpose(score, [0, 2, 1])
+
+        # alignment a_t = softmax(score)
         alignment = tf.nn.softmax(score, axis=2)
 
-        # context vector c_t is the average sum of encoder output
+        # context vector c_t is the weighted average sum of encoder output
         context = tf.matmul(alignment, encoder_output)
 
         return context, alignment
 
 
 class Decoder(tf.keras.Model):
-    def __init__(self, vocab_size, embedding_size, rnn_size):
+    def __init__(self, vocab_size, embedding_size, rnn_size, attention_func):
         super(Decoder, self).__init__()
-        self.attention = LuongAttention(rnn_size)
+        self.attention = LuongAttention(rnn_size, attention_func)
         self.rnn_size = rnn_size
         self.embedding = tf.keras.layers.Embedding(vocab_size, embedding_size)
         self.lstm = tf.keras.layers.LSTM(
@@ -125,26 +169,45 @@ class Decoder(tf.keras.Model):
         self.ws = tf.keras.layers.Dense(vocab_size)
 
     def call(self, sequence, state, encoder_output):
+        # Remember that the input to the decoder
+        # is now a batch of one-word sequences,
+        # which means that its shape is (batch_size, 1)
         embed = self.embedding(sequence)
+
+        # Therefore, the lstm_out has shape (batch_size, 1, rnn_size)
         lstm_out, state_h, state_c = self.lstm(embed, initial_state=state)
+
+        # Use self.attention to compute the context and alignment vectors
+        # context vector's shape: (batch_size, 1, rnn_size)
+        # alignment vector's shape: (batch_size, 1, source_length)
         context, alignment = self.attention(lstm_out, encoder_output)
 
-        # concat context and decoder_output
-        lstm_out = tf.concat([tf.squeeze(context, 1), tf.squeeze(lstm_out, 1)], 1)
+        # Combine the context vector and the LSTM output
+        # Before combined, both have shape of (batch_size, 1, rnn_size),
+        # so let's squeeze the axis 1 first
+        # After combined, it will have shape of (batch_size, 2 * rnn_size)
+        lstm_out = tf.concat(
+            [tf.squeeze(context, 1), tf.squeeze(lstm_out, 1)], 1)
+
+        # lstm_out now has shape (batch_size, rnn_size)
         lstm_out = self.wc(lstm_out)
+
+        # Finally, it is converted back to vocabulary space: (batch_size, vocab_size)
         logits = self.ws(lstm_out)
 
         return logits, state_h, state_c, alignment
 
 
 fr_vocab_size = len(fr_tokenizer.word_index) + 1
-decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, RNN_SIZE)
+decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, RNN_SIZE, ATTENTION_FUNC)
 
 # These lines can be used for debugging purpose
 # Or can be seen as a way to build the models
 initial_state = encoder.init_states(1)
 encoder_outputs = encoder(tf.constant([[1]]), initial_state)
-decoder_outputs = decoder(tf.constant([[1]]), encoder_outputs[1:], encoder_outputs[0])
+decoder_outputs = decoder(tf.constant(
+    [[1]]), encoder_outputs[1:], encoder_outputs[0])
+
 
 def loss_func(targets, logits):
     crossentropy = tf.keras.losses.SparseCategoricalCrossentropy(
@@ -179,7 +242,7 @@ def predict(test_source_text=None):
             de_input, (de_state_h, de_state_c), en_outputs[0])
         de_input = tf.expand_dims(tf.argmax(de_output, -1), 0)
         out_words.append(fr_tokenizer.index_word[de_input.numpy()[0][0]])
-        
+
         alignments.append(alignment.numpy())
 
         if out_words[-1] == '<end>' or len(out_words) >= 20:
@@ -197,10 +260,15 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
         en_states = en_outputs[1:]
         de_state_h, de_state_c = en_states
 
+        # We need to create a loop to iterate through the target sequences
         for i in range(target_seq_out.shape[1]):
+            # Input to the decoder must have shape of (batch_size, length)
+            # so we need to expand one dimension
             decoder_in = tf.expand_dims(target_seq_in[:, i], 1)
             logit, de_state_h, de_state_c, _ = decoder(
                 decoder_in, (de_state_h, de_state_c), en_outputs[0])
+
+            # The loss is now accumulated through the whole batch
             loss += loss_func(target_seq_out[:, i], logit)
 
     variables = encoder.trainable_variables + decoder.trainable_variables
@@ -226,9 +294,10 @@ for e in range(NUM_EPOCHS):
     for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
         loss = train_step(source_seq, target_seq_in,
                           target_seq_out, en_initial_states)
-        
+
         if batch % 100 == 0:
-            print('Epoch {} Batch {} Loss {:.4f}'.format(e + 1, batch, loss.numpy()))
+            print('Epoch {} Batch {} Loss {:.4f}'.format(
+                e + 1, batch, loss.numpy()))
 
     try:
         predict()
@@ -237,7 +306,7 @@ for e in range(NUM_EPOCHS):
     except Exception:
         continue
 
-        
+
 if not os.path.exists('heatmap'):
     os.makedirs('heatmap')
 
@@ -263,18 +332,19 @@ test_sents = (
     "How do we know this isn't a trap?",
     "I can't believe you're giving up.",
 )
+
 filenames = []
 
 for test_sent in test_sents:
     test_sequence = normalize_data(test_sequence)
     alignments, source, prediction = predict(test_sequence)
     attention = np.squeeze(alignments, (1, 2))
-    fig = plt.figure(figsize=(10,10))
+    fig = plt.figure(figsize=(10, 10))
     ax = fig.add_subplot(1, 1, 1)
-    ax.matshow(attention, cmap='viridis')
+    ax.matshow(attention, cmap='jet')
     ax.set_xticklabels([''] + source, rotation=90)
     ax.set_yticklabels([''] + prediction)
-    
+
     filenames.append('heatmap/test_{}.png')
     plt.savefig('heatmap/test_{}.png')
     plt.close()
