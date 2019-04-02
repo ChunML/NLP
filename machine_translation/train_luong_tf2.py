@@ -336,7 +336,7 @@ test_sents = (
 filenames = []
 
 for test_sent in test_sents:
-    test_sequence = normalize_data(test_sequence)
+    test_sequence = normalize_string(test_sent)
     alignments, source, prediction = predict(test_sequence)
     attention = np.squeeze(alignments, (1, 2))
     fig = plt.figure(figsize=(10, 10))
