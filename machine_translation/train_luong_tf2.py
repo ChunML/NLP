@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 import tensorflow as tf
-import tensorflow_datasets as tfds
 import numpy as np
 import unicodedata
 import re
@@ -9,8 +8,43 @@ import matplotlib.pyplot as plt
 import os
 import imageio
 
-with open('../data/eng_fra.txt') as f:
-    lines = f.read()
+
+# Mode can be either 'train' or 'infer'
+# Set to 'infer' will skip the training
+MODE = 'train'
+URL = 'http://www.manythings.org/anki/fra-eng.zip'
+FILENAME = 'fra-eng.zip'
+BATCH_SIZE = 64
+EMBEDDING_SIZE = 256
+RNN_SIZE = 512
+NUM_EPOCHS = 15
+
+# Set the score function to compute alignment vectors
+# Can choose between 'dot', 'general' or 'concat'
+ATTENTION_FUNC = 'concat'
+
+
+def maybe_download_and_read_file(url, filename):
+    if not os.path.exists(filename):
+        session = requests.Session()
+        response = session.get(url, stream=True)
+
+        CHUNK_SIZE = 32768
+        with open(filename, "wb") as f:
+            for chunk in response.iter_content(CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+
+    zipf = ZipFile(filename)
+    filename = zipf.namelist()
+    with zipf.open('fra.txt') as f:
+        lines = f.read()
+
+    return lines
+
+
+lines = maybe_download_and_read_file(URL, FILENAME)
+lines = lines.decode('utf-8')
 
 raw_data = []
 for line in lines.split('\n'):
@@ -63,14 +97,6 @@ data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
 print('French output sequences')
 print(data_fr_out[:2])
-
-BATCH_SIZE = 64
-EMBEDDING_SIZE = 256
-RNN_SIZE = 512
-
-# Set the score function to compute alignment vectors
-# Can choose between 'dot', 'general' or 'concat'
-ATTENTION_FUNC = 'general'
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -278,33 +304,40 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
     return loss / target_seq_out.shape[1]
 
 
-NUM_EPOCHS = 15
+if not os.path.exists('checkpoints_luong/encoder'):
+    os.makedirs('checkpoints_luong/encoder')
+if not os.path.exists('checkpoints_luong/decoder'):
+    os.makedirs('checkpoints_luong/decoder')
 
 # Uncomment these lines for inference mode
-# encoder.load_weights('checkpoints_luong/encoder_15.h5')
-# decoder.load_weights('checkpoints_luong/decoder_15.h5')
+encoder_checkpoint = tf.train.latest_checkpoint('checkpoints_luong/encoder')
+decoder_checkpoint = tf.train.latest_checkpoint('checkpoints_luong/decoder')
 
-if not os.path.exists('checkpoints_luong'):
-    os.makedirs('checkpoints_luong')
+if encoder_checkpoint is not None and decoder_checkpoint is not None:
+    encoder.load_weights(encoder_checkpoint)
+    decoder.load_weights(decoder_checkpoint)
 
-for e in range(NUM_EPOCHS):
-    en_initial_states = encoder.init_states(BATCH_SIZE)
-    encoder.save_weights('checkpoints_luong/encoder_{}.h5'.format(e + 1))
-    decoder.save_weights('checkpoints_luong/decoder_{}.h5'.format(e + 1))
-    for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
-        loss = train_step(source_seq, target_seq_in,
-                          target_seq_out, en_initial_states)
+if MODE == 'train':
+    for e in range(NUM_EPOCHS):
+        en_initial_states = encoder.init_states(BATCH_SIZE)
+        encoder.save_weights(
+            'checkpoints_luong/encoder/encoder_{}.h5'.format(e + 1))
+        decoder.save_weights(
+            'checkpoints_luong/decoder/decoder_{}.h5'.format(e + 1))
+        for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
+            loss = train_step(source_seq, target_seq_in,
+                              target_seq_out, en_initial_states)
 
-        if batch % 100 == 0:
-            print('Epoch {} Batch {} Loss {:.4f}'.format(
-                e + 1, batch, loss.numpy()))
+            if batch % 100 == 0:
+                print('Epoch {} Batch {} Loss {:.4f}'.format(
+                    e + 1, batch, loss.numpy()))
 
-    try:
-        predict()
+        try:
+            predict()
 
-        predict("How are you today ?")
-    except Exception:
-        continue
+            predict("How are you today ?")
+        except Exception:
+            continue
 
 
 if not os.path.exists('heatmap'):
