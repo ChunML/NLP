@@ -7,6 +7,7 @@ import re
 import matplotlib.pyplot as plt
 import os
 import imageio
+from zipfile import ZipFile
 
 
 # Mode can be either 'train' or 'infer'
