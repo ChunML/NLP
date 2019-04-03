@@ -43,17 +43,17 @@ def normalize_string(s):
 
 raw_data_en, raw_data_fr = list(zip(*raw_data))
 raw_data_en, raw_data_fr = list(raw_data_en), list(raw_data_fr)
-raw_data_en = ['<start> ' + normalize_string(data) + ' <end>' for data in raw_data_en]
+raw_data_en = [normalize_string(data) for data in raw_data_en]
 raw_data_fr_in = ['<start> ' + normalize_string(data) for data in raw_data_fr]
 raw_data_fr_out = [normalize_string(data) + ' <end>' for data in raw_data_fr]
 
-en_tokenizer = tf.keras.preprocessing.text.Tokenizer(1000, filters='')
+en_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 en_tokenizer.fit_on_texts(raw_data_en)
 data_en = en_tokenizer.texts_to_sequences(raw_data_en)
 data_en = tf.keras.preprocessing.sequence.pad_sequences(data_en,
                                                         padding='post')
 
-fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(1000, filters='')
+fr_tokenizer = tf.keras.preprocessing.text.Tokenizer(filters='')
 fr_tokenizer.fit_on_texts(raw_data_fr_in)
 fr_tokenizer.fit_on_texts(raw_data_fr_out)
 data_fr_in = fr_tokenizer.texts_to_sequences(raw_data_fr_in)
@@ -64,9 +64,10 @@ data_fr_out = fr_tokenizer.texts_to_sequences(raw_data_fr_out)
 data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
 
+BATCH_SIZE = 5
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
-dataset = dataset.shuffle(20).batch(5)
+dataset = dataset.shuffle(20).batch(BATCH_SIZE)
 
 
 class Encoder(tf.keras.Model):
@@ -86,13 +87,6 @@ class Encoder(tf.keras.Model):
     def init_states(self, batch_size):
         return (tf.zeros([batch_size, self.lstm_size]),
                 tf.zeros([batch_size, self.lstm_size]))
-
-
-en_vocab_size = len(en_tokenizer.word_index) + 1
-EMBEDDING_SIZE = 32
-LSTM_SIZE = 64
-
-encoder = Encoder(en_vocab_size, EMBEDDING_SIZE, LSTM_SIZE)
 
 
 class Decoder(tf.keras.Model):
@@ -116,8 +110,18 @@ class Decoder(tf.keras.Model):
                 tf.zeros([batch_size, self.lstm_size]))
 
 
+en_vocab_size = len(en_tokenizer.word_index) + 1
 fr_vocab_size = len(fr_tokenizer.word_index) + 1
+
+EMBEDDING_SIZE = 32
+LSTM_SIZE = 64
+
+encoder = Encoder(en_vocab_size, EMBEDDING_SIZE, LSTM_SIZE)
 decoder = Decoder(fr_vocab_size, EMBEDDING_SIZE, LSTM_SIZE)
+
+initial_states = encoder.init_states(1)
+encoder_outputs = encoder(tf.constant([[1, 2, 3]]), initial_states)
+decoder_outputs = decoder(tf.constant([[1, 2, 3]]), encoder_outputs[1:])
 
 
 def loss_func(targets, logits):
@@ -133,8 +137,9 @@ def loss_func(targets, logits):
 optimizer = tf.keras.optimizers.Adam()
 
 
-def predict():
-    test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
+def predict(test_source_text=None):
+    if test_source_text is None:
+        test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
     print(test_source_text)
     test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
     print(test_source_seq)
@@ -178,7 +183,6 @@ def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
 
 
 NUM_EPOCHS = 300
-BATCH_SIZE = 5
 
 for e in range(NUM_EPOCHS):
     en_initial_states = encoder.init_states(BATCH_SIZE)
@@ -191,4 +195,29 @@ for e in range(NUM_EPOCHS):
 
     print('Epoch {} Loss {:.4f}'.format(e + 1, loss.numpy()))
 
-predict()
+test_sents = (
+    'What a ridiculous concept!',
+    'Your idea is not entirely crazy.',
+    "A man's worth lies in what he is.",
+    'What he did is very wrong.',
+    "All three of you need to do that.",
+    "Are you giving me another chance?",
+    "Both Tom and Mary work as models.",
+    "Can I have a few minutes, please?",
+    "Could you close the door, please?",
+    "Did you plant pumpkins this year?",
+    "Do you ever study in the library?",
+    "Don't be deceived by appearances.",
+    "Excuse me. Can you speak English?",
+    "Few people know the true meaning.",
+    "Germany produced many scientists.",
+    "Guess whose birthday it is today.",
+    "He acted like he owned the place.",
+    "Honesty will pay in the long run.",
+    "How do we know this isn't a trap?",
+    "I can't believe you're giving up.",
+)
+
+for test_sent in test_sents:
+    test_sequence = normalize_string(test_sent)
+    predict(test_sequence)
