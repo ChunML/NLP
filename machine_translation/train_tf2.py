@@ -1,11 +1,46 @@
-import tensorflow as tf
-import tensorflow_datasets as tfds
-import numpy as np
-import re
-import unicodedata
+# -*- coding: utf-8 -*-
 
-with open('../data/eng_fra.txt') as f:
-    lines = f.read()
+import tensorflow as tf
+import numpy as np
+import unicodedata
+import re
+import matplotlib.pyplot as plt
+import os
+import imageio
+
+
+# Mode can be either 'train' or 'infer'
+# Set to 'infer' will skip the training
+MODE = 'train'
+URL = 'http://www.manythings.org/anki/fra-eng.zip'
+FILENAME = 'fra-eng.zip'
+BATCH_SIZE = 64
+EMBEDDING_SIZE = 256
+LSTM_SIZE = 512
+NUM_EPOCHS = 15
+
+
+def maybe_download_and_read_file(url, filename):
+    if not os.path.exists(filename):
+        session = requests.Session()
+        response = session.get(url, stream=True)
+
+        CHUNK_SIZE = 32768
+        with open(filename, "wb") as f:
+            for chunk in response.iter_content(CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+
+    zipf = ZipFile(filename)
+    filename = zipf.namelist()
+    with zipf.open('fra.txt') as f:
+        lines = f.read()
+
+    return lines
+
+
+lines = maybe_download_and_read_file(URL, FILENAME)
+lines = lines.decode('utf-8')
 
 raw_data = []
 for line in lines.split('\n'):
@@ -56,10 +91,6 @@ data_fr_out = fr_tokenizer.texts_to_sequences(raw_data_fr_out)
 data_fr_out = tf.keras.preprocessing.sequence.pad_sequences(data_fr_out,
                                                             padding='post')
 print(data_fr_out[:2])
-
-BATCH_SIZE = 64
-EMBEDDING_SIZE = 256
-LSTM_SIZE = 1024
 
 dataset = tf.data.Dataset.from_tensor_slices(
     (data_en, data_fr_in, data_fr_out))
@@ -180,23 +211,64 @@ def predict(test_source_text=None):
     print(' '.join(out_words))
 
 
-NUM_EPOCHS = 15
+if not os.path.exists('checkpoints/encoder'):
+    os.makedirs('checkpoints/encoder')
+if not os.path.exists('checkpoints/decoder'):
+    os.makedirs('checkpoints/decoder')
 
-
-for e in range(NUM_EPOCHS):
-    en_initial_states = encoder.init_states(BATCH_SIZE)
-    encoder.save_weights('checkpoints/encoder_{}.h5'.format(e + 1))
-    decoder.save_weights('checkpoints/decoder_{}.h5'.format(e + 1))
-
-    for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
-        loss = train_step(source_seq, target_seq_in, target_seq_out, en_initial_states)
-        
-        if batch % 100 == 0:
-            print('Epoch {} Batch {} Loss {:.4f}'.format(e + 1, batch, loss.numpy()))
     
-    try:
-        predict()
-        
-        predict("How are you today ?")
-    except Exception:
-        continue
+# Uncomment these lines for inference mode
+encoder_checkpoint = tf.train.latest_checkpoint('checkpoints/encoder')
+decoder_checkpoint = tf.train.latest_checkpoint('checkpoints/decoder')
+
+if encoder_checkpoint is not None and decoder_checkpoint is not None:
+    encoder.load_weights(encoder_checkpoint)
+    decoder.load_weights(decoder_checkpoint)
+    
+if MODE == 'train':
+    for e in range(NUM_EPOCHS):
+        en_initial_states = encoder.init_states(BATCH_SIZE)
+        encoder.save_weights('checkpoints/encoder/encoder_{}.h5'.format(e + 1))
+        decoder.save_weights('checkpoints/decoder/decoder_{}.h5'.format(e + 1))
+
+        for batch, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
+            loss = train_step(source_seq, target_seq_in, target_seq_out, en_initial_states)
+
+            if batch % 100 == 0:
+                print('Epoch {} Batch {} Loss {:.4f}'.format(e + 1, batch, loss.numpy()))
+
+        try:
+            predict()
+
+            predict("How are you today ?")
+        except Exception:
+            continue
+
+test_sents = (
+    'What a ridiculous concept!',
+    'Your idea is not entirely crazy.',
+    "A man's worth lies in what he is.",
+    'What he did is very wrong.',
+    "All three of you need to do that.",
+    "Are you giving me another chance?",
+    "Both Tom and Mary work as models.",
+    "Can I have a few minutes, please?",
+    "Could you close the door, please?",
+    "Did you plant pumpkins this year?",
+    "Do you ever study in the library?",
+    "Don't be deceived by appearances.",
+    "Excuse me. Can you speak English?",
+    "Few people know the true meaning.",
+    "Germany produced many scientists.",
+    "Guess whose birthday it is today.",
+    "He acted like he owned the place.",
+    "Honesty will pay in the long run.",
+    "How do we know this isn't a trap?",
+    "I can't believe you're giving up.",
+)
+
+filenames = []
+
+for test_sent in test_sents:
+    test_sequence = normalize_string(test_sent)
+    predict(test_sequence)
