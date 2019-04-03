@@ -7,6 +7,7 @@ import re
 import matplotlib.pyplot as plt
 import os
 import imageio
+from zipfile import ZipFile
 
 
 # Mode can be either 'train' or 'infer'
@@ -168,7 +169,6 @@ optimizer = tf.keras.optimizers.Adam(clipnorm=5.0)
 
 @tf.function
 def train_step(source_seq, target_seq_in, target_seq_out, en_initial_states):
-    loss = 0
     with tf.GradientTape() as tape:
         en_outputs = encoder(source_seq, en_initial_states)
         en_states = en_outputs[1:]
@@ -266,8 +266,6 @@ test_sents = (
     "How do we know this isn't a trap?",
     "I can't believe you're giving up.",
 )
-
-filenames = []
 
 for test_sent in test_sents:
     test_sequence = normalize_string(test_sent)
