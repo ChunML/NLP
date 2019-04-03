@@ -369,7 +369,7 @@ test_sents = (
 
 filenames = []
 
-for test_sent in test_sents:
+for i, test_sent in enumerate(test_sents):
     test_sequence = normalize_string(test_sent)
     alignments, source, prediction = predict(test_sequence)
     attention = np.squeeze(alignments, (1, 2))
@@ -379,8 +379,8 @@ for test_sent in test_sents:
     ax.set_xticklabels([''] + source, rotation=90)
     ax.set_yticklabels([''] + prediction)
 
-    filenames.append('heatmap/test_{}.png')
-    plt.savefig('heatmap/test_{}.png')
+    filenames.append('heatmap/test_{}.png'.format(i))
+    plt.savefig('heatmap/test_{}.png'.format(i))
     plt.close()
 
 with imageio.get_writer('translation_heatmaps.gif', mode='I', duration=2) as writer:
