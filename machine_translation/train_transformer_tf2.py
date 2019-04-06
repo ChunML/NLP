@@ -117,19 +117,18 @@ class MultiHeadAttention(tf.keras.Model):
     
     def call(self, decoder_output, encoder_output, h=8, mask=None):
         heads = []
-        alignments = []
         for _ in range(h):
             score = tf.matmul(self.wq(decoder_output), self.wk(encoder_output), transpose_b=True) / np.sqrt(self.key_size)
-            if not mask is None:
-                score *= mask
             alignment = tf.nn.softmax(score, axis=2)
-            alignments.append(alignment)
+            if not mask is None:
+                alignment *= mask
+                alignment /= tf.reduce_sum(alignment, axis=-1, keepdims=True)
+                
             head = tf.matmul(alignment, self.wv(encoder_output))
             heads.append(head)
         heads = tf.concat(heads, axis=2)
-        alignments = tf.reduce_mean(tf.concat(alignments, axis=1), axis=1, keepdims=True)
         heads = self.wo(heads)
-        return heads, alignments
+        return heads
 
 """## Create the Encoder"""
 
@@ -154,15 +153,18 @@ class Encoder(tf.keras.Model):
         sub_in = tf.concat(sub_in, axis=1)
         
         for i in range(self.num_layers):
-            contexts = []
+            sub_out = []
             for j in range(sub_in.shape[1]):
-                context, alignment = self.attention[i](
-                    tf.expand_dims(sub_in[:, j, :], axis=1), sub_in, self.h)
+                values = [tf.expand_dims(sub_in[:, k, :], axis=1) for k in range(sub_in.shape[1]) if k != j]
+                values = tf.concat(values, axis=1)
+                attention = self.attention[i](
+                    tf.expand_dims(sub_in[:, j, :], axis=1), values, self.h)
 
-                contexts.append(context)
+#                 attention += tf.expand_dims(sub_in[:, j, :], axis=1)
+                sub_out.append(attention)
 
-            contexts = tf.concat(contexts, axis=1)
-            sub_out = sub_in + contexts
+            sub_out = tf.concat(sub_out, axis=1)
+            sub_out = sub_in + sub_out
 
             ffn_in = self.dense_2[i](self.dense_1[i](sub_out))
             ffn_out = ffn_in + sub_out
@@ -210,25 +212,32 @@ class Decoder(tf.keras.Model):
         for i in range(self.num_layers):
             # BOTTOM MULTIHEAD SUB LAYER
             bot_sub_out = []
+            
             for j in range(bot_sub_in.shape[1]):
-                mask = tf.constant([1] * (j + 1) + [0] * (bot_sub_in.shape[1] - j -1), dtype=tf.float32)
-                context, alignment = self.attention_bot[i](
-                    tf.expand_dims(bot_sub_in[:, j, :], axis=1), bot_sub_in, self.h, mask)
+                if j == 0:
+                    bot_sub_out.append(tf.expand_dims(
+                        bot_sub_in[:, j, :], axis=1))
+                    continue
+                values = [tf.expand_dims(
+                    bot_sub_in[:, k, :], axis=1) for k in range(bot_sub_in.shape[1]) if k < j]
+                values = tf.concat(values, axis=1)
+                mask = tf.constant([1] * j + [0] * (bot_sub_in.shape[1] - j -1), dtype=tf.float32)
+                attention = self.attention_bot[i](
+                    tf.expand_dims(bot_sub_in[:, j, :], axis=1), values, self.h) #, mask)
 
-                bot_sub_out.append(context)
-
+                bot_sub_out.append(attention)
             bot_sub_out = tf.concat(bot_sub_out, axis=1)
             bot_sub_out = bot_sub_in + bot_sub_out
-
+            
             # MIDDLE MULTIHEAD SUB LAYER
             mid_sub_in = bot_sub_out
 
             mid_sub_out = []
             for j in range(mid_sub_in.shape[1]):
-                context, alignment = self.attention_mid[i](
+                attention = self.attention_mid[i](
                     tf.expand_dims(mid_sub_in[:, j, :], axis=1), encoder_output, self.h)
 
-                mid_sub_out.append(context)
+                mid_sub_out.append(attention)
 
             mid_sub_out = tf.concat(mid_sub_out, axis=1)
             mid_sub_out = mid_sub_out + mid_sub_in
@@ -262,7 +271,7 @@ def loss_func(targets, logits):
     return loss
 
 
-optimizer = tf.keras.optimizers.Adam(clipnorm=5.0)
+optimizer = tf.keras.optimizers.Adam()
 
 def predict(test_source_text=None):
     if test_source_text is None:
@@ -295,6 +304,9 @@ def train_step(source_seq, target_seq_in, target_seq_out):
         encoder_output = encoder(source_seq)
         
         decoder_output = decoder(target_seq_in, encoder_output)
+        
+#         print(tf.argmax(decoder_output, axis=-1))
+#         print(target_seq_out)
 
         loss = loss_func(target_seq_out, decoder_output)
 
