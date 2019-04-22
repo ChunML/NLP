@@ -99,22 +99,22 @@ dataset = dataset.shuffle(len(data_en)).batch(BATCH_SIZE)
 
 
 def positional_embedding(pos, model_size):
-    PE = np.zeros((1, 1, model_size))
+    PE = np.zeros((1, model_size))
     for i in range(model_size):
         if i % 2 == 0:
-            PE[:, :, i] = np.sin(pos / 10000 ** (i / model_size))
+            PE[:, i] = np.sin(pos / 10000 ** (i / model_size))
         else:
-            PE[:, :, i] = np.cos(pos / 10000 ** ((i - 1) / model_size))
+            PE[:, i] = np.cos(pos / 10000 ** ((i - 1) / model_size))
     return PE
 
 max_length = max(len(data_en[0]), len(data_fr_in[0]))
-MODEL_SIZE = 256
+MODEL_SIZE = 128
 
 pes = []
 for i in range(max_length):
     pes.append(positional_embedding(i, MODEL_SIZE))
 
-pes = np.concatenate(pes, axis=1)
+pes = np.concatenate(pes, axis=0)
 pes = tf.constant(pes, dtype=tf.float32)
 
 
@@ -127,11 +127,10 @@ print(data_fr_in.shape)
 
 
 class MultiHeadAttention(tf.keras.Model):
-    def __init__(self, key_size, value_size, model_size, h):
+    def __init__(self, model_size, h):
         super(MultiHeadAttention, self).__init__()
-        self.key_size = key_size
+        self.key_size = model_size // h
         self.h = h
-
         self.wq = tf.keras.layers.Dense(model_size) #[tf.keras.layers.Dense(key_size) for _ in range(h)]
         self.wk = tf.keras.layers.Dense(model_size) #[tf.keras.layers.Dense(key_size) for _ in range(h)]
         self.wv = tf.keras.layers.Dense(model_size) #[tf.keras.layers.Dense(value_size) for _ in range(h)]
@@ -162,7 +161,7 @@ class MultiHeadAttention(tf.keras.Model):
         # Compute the dot score
         # and divide the score by square root of key_size (as stated in paper)
         # (must convert key_size to float32 otherwise an error would occur)
-        score = tf.matmul(query, key, transpose_b=True) / tf.math.sqrt(tf.cast(self.key_size, dtype=tf.float32))
+        score = tf.matmul(query, key, transpose_b=True) / tf.math.sqrt(tf.dtypes.cast(self.key_size, dtype=tf.float32))
         # score will have shape of (batch, h, query_len, value_len)
         
         # Mask out the score if a mask is provided
@@ -189,7 +188,7 @@ class MultiHeadAttention(tf.keras.Model):
         # Apply one last full connected layer (WO)
         heads = self.wo(context)
         
-        return heads
+        return heads, alignment
 
 
 """## Create the Encoder"""
@@ -202,8 +201,9 @@ class Encoder(tf.keras.Model):
         self.num_layers = num_layers
         self.h = h
         self.embedding = tf.keras.layers.Embedding(vocab_size, model_size)
-        self.attention = [MultiHeadAttention(
-            model_size // h, model_size // h, model_size, h) for _ in range(num_layers)]
+        self.embedding_dropout = tf.keras.layers.Dropout(0.1)
+        self.attention = [MultiHeadAttention(model_size, h) for _ in range(num_layers)]
+        self.attention_dropout = [tf.keras.layers.Dropout(0.1) for _ in range(num_layers)]
 
         self.attention_norm = [tf.keras.layers.LayerNormalization(
             epsilon=1e-6) for _ in range(num_layers)]
@@ -212,6 +212,7 @@ class Encoder(tf.keras.Model):
             MODEL_SIZE * 4, activation='relu') for _ in range(num_layers)]
         self.dense_2 = [tf.keras.layers.Dense(
             model_size) for _ in range(num_layers)]
+        self.ffn_dropout = [tf.keras.layers.Dropout(0.1) for _ in range(num_layers)]
         self.ffn_norm = [tf.keras.layers.LayerNormalization(
             epsilon=1e-6) for _ in range(num_layers)]
 
@@ -219,24 +220,29 @@ class Encoder(tf.keras.Model):
         embed_out = self.embedding(sequence)
 
         embed_out *= tf.math.sqrt(tf.cast(self.model_size, tf.float32))
-        embed_out += pes[:, :sequence.shape[1], :]
+        embed_out += pes[:sequence.shape[1], :]
+        embed_out = self.embedding_dropout(embed_out)
 
         sub_in = embed_out
+        alignments = []
 
         for i in range(self.num_layers):
-            sub_out = self.attention[i](sub_in, sub_in, encoder_mask)
+            sub_out, alignment = self.attention[i](sub_in, sub_in, encoder_mask)
+            sub_out = self.attention_dropout[i](sub_out, training=training)
             sub_out = sub_in + sub_out
             sub_out = self.attention_norm[i](sub_out)
-
+            
+            alignments.append(alignment)
             ffn_in = sub_out
 
             ffn_out = self.dense_2[i](self.dense_1[i](ffn_in))
+            ffn_out = self.ffn_dropout[i](ffn_out, training=training)
             ffn_out = ffn_in + ffn_out
             ffn_out = self.ffn_norm[i](ffn_out)
 
             sub_in = ffn_out
 
-        return ffn_out
+        return ffn_out, alignments
 
 
 H = 8
@@ -245,7 +251,7 @@ vocab_size = len(en_tokenizer.word_index) + 1
 encoder = Encoder(vocab_size, MODEL_SIZE, NUM_LAYERS, H)
 print(vocab_size)
 sequence_in = tf.constant([[1, 2, 3, 0, 0]])
-encoder_output = encoder(sequence_in)
+encoder_output, _ = encoder(sequence_in)
 encoder_output.shape
 
 
@@ -256,12 +262,13 @@ class Decoder(tf.keras.Model):
         self.num_layers = num_layers
         self.h = h
         self.embedding = tf.keras.layers.Embedding(vocab_size, model_size)
-        self.attention_bot = [MultiHeadAttention(
-            model_size // h, model_size // h, model_size, h) for _ in range(num_layers)]
+        self.embedding_dropout = tf.keras.layers.Dropout(0.1)
+        self.attention_bot = [MultiHeadAttention(model_size, h) for _ in range(num_layers)]
+        self.attention_bot_dropout = [tf.keras.layers.Dropout(0.1) for _ in range(num_layers)]
         self.attention_bot_norm = [tf.keras.layers.LayerNormalization(
             epsilon=1e-6) for _ in range(num_layers)]
-        self.attention_mid = [MultiHeadAttention(
-            model_size // h, model_size // h, model_size, h) for _ in range(num_layers)]
+        self.attention_mid = [MultiHeadAttention(model_size, h) for _ in range(num_layers)]
+        self.attention_mid_dropout = [tf.keras.layers.Dropout(0.1) for _ in range(num_layers)]
         self.attention_mid_norm = [tf.keras.layers.LayerNormalization(
             epsilon=1e-6) for _ in range(num_layers)]
 
@@ -269,6 +276,7 @@ class Decoder(tf.keras.Model):
             MODEL_SIZE * 4, activation='relu') for _ in range(num_layers)]
         self.dense_2 = [tf.keras.layers.Dense(
             model_size) for _ in range(num_layers)]
+        self.ffn_dropout = [tf.keras.layers.Dropout(0.1) for _ in range(num_layers)]
         self.ffn_norm = [tf.keras.layers.LayerNormalization(
             epsilon=1e-6) for _ in range(num_layers)]
 
@@ -279,9 +287,12 @@ class Decoder(tf.keras.Model):
         embed_out = self.embedding(sequence)
 
         embed_out *= tf.math.sqrt(tf.cast(self.model_size, tf.float32))
-        embed_out += pes[:, :sequence.shape[1], :]
+        embed_out += pes[:sequence.shape[1], :]
+        embed_out = self.embedding_dropout(embed_out)
 
         bot_sub_in = embed_out
+        bot_alignments = []
+        mid_alignments = []
 
         for i in range(self.num_layers):
             # BOTTOM MULTIHEAD SUB LAYER
@@ -291,22 +302,29 @@ class Decoder(tf.keras.Model):
                 mask = tf.linalg.band_part(tf.ones((seq_len, seq_len)), -1, 0)
             else:
                 mask = None
-            bot_sub_out = self.attention_bot[i](bot_sub_in, bot_sub_in, mask)
+            bot_sub_out, bot_alignment = self.attention_bot[i](bot_sub_in, bot_sub_in, mask)
+            bot_sub_out = self.attention_bot_dropout[i](bot_sub_out, training=training)
             bot_sub_out = bot_sub_in + bot_sub_out
             bot_sub_out = self.attention_bot_norm[i](bot_sub_out)
+            
+            bot_alignments.append(bot_alignment)
 
             # MIDDLE MULTIHEAD SUB LAYER
             mid_sub_in = bot_sub_out
 
-            mid_sub_out = self.attention_mid[i](
+            mid_sub_out, mid_alignment = self.attention_mid[i](
                 mid_sub_in, encoder_output, encoder_mask)
+            mid_sub_out = self.attention_mid_dropout[i](mid_sub_out, training=training)
             mid_sub_out = mid_sub_out + mid_sub_in
             mid_sub_out = self.attention_mid_norm[i](mid_sub_out)
+            
+            mid_alignments.append(mid_alignment)
 
             # FFN
             ffn_in = mid_sub_out
 
             ffn_out = self.dense_2[i](self.dense_1[i](ffn_in))
+            ffn_out = self.ffn_dropout[i](ffn_out, training=training)
             ffn_out = ffn_out + ffn_in
             ffn_out = self.ffn_norm[i](ffn_out)
 
@@ -314,14 +332,14 @@ class Decoder(tf.keras.Model):
 
         logits = self.dense(ffn_out)
 
-        return logits
+        return logits, bot_alignments, mid_alignments
 
 
 vocab_size = len(fr_tokenizer.word_index) + 1
 decoder = Decoder(vocab_size, MODEL_SIZE, NUM_LAYERS, H)
 
 sequence_in = tf.constant([[14, 24, 36, 0, 0]])
-decoder_output = decoder(sequence_in, encoder_output)
+decoder_output, _, _ = decoder(sequence_in, encoder_output)
 decoder_output.shape
 
 
@@ -367,7 +385,7 @@ def predict(test_source_text=None):
     test_source_seq = en_tokenizer.texts_to_sequences([test_source_text])
     print(test_source_seq)
 
-    en_output = encoder(tf.constant(test_source_seq), training=False)
+    en_output, en_alignments = encoder(tf.constant(test_source_seq), training=False)
 
     de_input = tf.constant(
         [[fr_tokenizer.word_index['<start>']]], dtype=tf.int64)
@@ -375,7 +393,7 @@ def predict(test_source_text=None):
     out_words = []
 
     while True:
-        de_output = decoder(de_input, en_output, training=False)
+        de_output, de_bot_alignments, de_mid_alignments = decoder(de_input, en_output, training=False)
         new_word = tf.expand_dims(tf.argmax(de_output, -1)[:, -1], axis=1)
         out_words.append(fr_tokenizer.index_word[new_word.numpy()[0][0]])
 
@@ -388,6 +406,7 @@ def predict(test_source_text=None):
             break
 
     print(' '.join(out_words))
+    return en_alignments, de_bot_alignments, de_mid_alignments, test_source_text.split(' '), out_words
 
 
 @tf.function
@@ -399,9 +418,9 @@ def train_step(source_seq, target_seq_in, target_seq_out):
         # to make it broadcastable when computing attention heads
         encoder_mask = tf.expand_dims(encoder_mask, axis=1)
         encoder_mask = tf.expand_dims(encoder_mask, axis=1)
-        encoder_output = encoder(source_seq, encoder_mask=encoder_mask)
+        encoder_output, _ = encoder(source_seq, encoder_mask=encoder_mask)
 
-        decoder_output = decoder(
+        decoder_output, _, _ = decoder(
             target_seq_in, encoder_output, encoder_mask=encoder_mask)
 
         loss = loss_func(target_seq_out, decoder_output)
