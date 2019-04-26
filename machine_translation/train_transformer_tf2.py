@@ -17,6 +17,15 @@ NUM_EPOCHS = 15
 
 
 def maybe_download_and_read_file(url, filename):
+    """ Download and unzip training data
+
+    Args:
+        url: data url
+        filename: zip filename
+    
+    Returns:
+        Training data: an array containing text lines from the data
+    """
     if not os.path.exists(filename):
         session = requests.Session()
         response = session.get(url, stream=True)
@@ -98,7 +107,16 @@ dataset = dataset.shuffle(len(data_en)).batch(BATCH_SIZE)
 """## Create the Positional Embedding"""
 
 
-def positional_embedding(pos, model_size):
+def positional_encoding(pos, model_size):
+    """ Compute positional encoding for a particular position
+
+    Args:
+        pos: position of a token in the sequence
+        model_size: depth size of the model
+    
+    Returns:
+        The positional encoding for the given token
+    """
     PE = np.zeros((1, model_size))
     for i in range(model_size):
         if i % 2 == 0:
@@ -112,7 +130,7 @@ MODEL_SIZE = 128
 
 pes = []
 for i in range(max_length):
-    pes.append(positional_embedding(i, MODEL_SIZE))
+    pes.append(positional_encoding(i, MODEL_SIZE))
 
 pes = np.concatenate(pes, axis=0)
 pes = tf.constant(pes, dtype=tf.float32)
@@ -127,6 +145,16 @@ print(data_fr_in.shape)
 
 
 class MultiHeadAttention(tf.keras.Model):
+    """ Class for Multi-Head Attention layer
+
+    Attributes:
+        key_size: d_key in the paper
+        h: number of attention heads
+        wq: the Linear layer for Q
+        wk: the Linear layer for K
+        wv: the Linear layer for V
+        wo: the Linear layer for the output
+    """
     def __init__(self, model_size, h):
         super(MultiHeadAttention, self).__init__()
         self.key_size = model_size // h
@@ -137,6 +165,19 @@ class MultiHeadAttention(tf.keras.Model):
         self.wo = tf.keras.layers.Dense(model_size)
 
     def call(self, query, value, mask=None):
+        """ The forward pass for Multi-Head Attention layer
+
+        Args:
+            query: the Q matrix
+            value: the V matrix, acts as V and K
+            mask: mask to filter out unwanted tokens
+                  - zero mask: mask for padded tokens
+                  - right-side mask: mask to prevent attention towards tokens on the right-hand side
+        
+        Returns:
+            The concatenated context vector
+            The alignment (attention) vectors of all heads
+        """
         # query has shape (batch, query_len, model_size)
         # value has shape (batch, value_len, model_size)
         query = self.wq(query)
@@ -195,6 +236,22 @@ class MultiHeadAttention(tf.keras.Model):
 
 
 class Encoder(tf.keras.Model):
+    """ Class for the Encoder
+
+    Args:
+        model_size: d_model in the paper (depth size of the model)
+        num_layers: number of layers (Multi-Head Attention + FNN)
+        h: number of attention heads
+        embedding: Embedding layer
+        embedding_dropout: Dropout layer for Embedding
+        attention: array of Multi-Head Attention layers
+        attention_dropout: array of Dropout layers for Multi-Head Attention
+        attention_norm: array of LayerNorm layers for Multi-Head Attention
+        dense_1: array of first Dense layers for FFN
+        dense_2: array of second Dense layers for FFN
+        ffn_dropout: array of Dropout layers for FFN
+        ffn_norm: array of LayerNorm layers for FFN
+    """
     def __init__(self, vocab_size, model_size, num_layers, h):
         super(Encoder, self).__init__()
         self.model_size = model_size
@@ -217,6 +274,17 @@ class Encoder(tf.keras.Model):
             epsilon=1e-6) for _ in range(num_layers)]
 
     def call(self, sequence, training=True, encoder_mask=None):
+        """ Forward pass for the Encoder
+
+        Args:
+            sequence: source input sequences
+            training: whether training or not (for Dropout)
+            encoder_mask: padding mask for the Encoder's Multi-Head Attention
+        
+        Returns:
+            The output of the Encoder (batch_size, length, model_size)
+            The alignment (attention) vectors for all layers
+        """
         embed_out = self.embedding(sequence)
 
         embed_out *= tf.math.sqrt(tf.cast(self.model_size, tf.float32))
@@ -256,6 +324,27 @@ encoder_output.shape
 
 
 class Decoder(tf.keras.Model):
+    """ Class for the Decoder
+
+    Args:
+        model_size: d_model in the paper (depth size of the model)
+        num_layers: number of layers (Multi-Head Attention + FNN)
+        h: number of attention heads
+        embedding: Embedding layer
+        embedding_dropout: Dropout layer for Embedding
+        attention_bot: array of bottom Multi-Head Attention layers (self attention)
+        attention_bot_dropout: array of Dropout layers for bottom Multi-Head Attention
+        attention_bot_norm: array of LayerNorm layers for bottom Multi-Head Attention
+        attention_mid: array of middle Multi-Head Attention layers
+        attention_mid_dropout: array of Dropout layers for middle Multi-Head Attention
+        attention_mid_norm: array of LayerNorm layers for middle Multi-Head Attention
+        dense_1: array of first Dense layers for FFN
+        dense_2: array of second Dense layers for FFN
+        ffn_dropout: array of Dropout layers for FFN
+        ffn_norm: array of LayerNorm layers for FFN
+
+        dense: Dense layer to compute final output
+    """
     def __init__(self, vocab_size, model_size, num_layers, h):
         super(Decoder, self).__init__()
         self.model_size = model_size
@@ -283,6 +372,19 @@ class Decoder(tf.keras.Model):
         self.dense = tf.keras.layers.Dense(vocab_size)
 
     def call(self, sequence, encoder_output, training=True, encoder_mask=None):
+        """ Forward pass for the Decoder
+
+        Args:
+            sequence: source input sequences
+            encoder_output: output of the Encoder (for computing middle attention)
+            training: whether training or not (for Dropout)
+            encoder_mask: padding mask for the Encoder's Multi-Head Attention
+        
+        Returns:
+            The output of the Encoder (batch_size, length, model_size)
+            The bottom alignment (attention) vectors for all layers
+            The middle alignment (attention) vectors for all layers
+        """
         # EMBEDDING AND POSITIONAL EMBEDDING
         embed_out = self.embedding(sequence)
 
@@ -356,6 +458,12 @@ def loss_func(targets, logits):
 
 
 class WarmupThenDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    """ Learning schedule for training the Transformer
+
+    Attributes:
+        model_size: d_model in the paper (depth size of the model)
+        warmup_steps: number of warmup steps at the beginning
+    """
     def __init__(self, model_size, warmup_steps=4000):
         super(WarmupThenDecaySchedule, self).__init__()
 
@@ -379,6 +487,18 @@ optimizer = tf.keras.optimizers.Adam(lr,
 
 
 def predict(test_source_text=None):
+    """ Predict the output sentence for a given input sentence
+
+    Args:
+        test_source_text: input sentence (raw string)
+    
+    Returns:
+        The encoder's attention vectors
+        The decoder's bottom attention vectors
+        The decoder's middle attention vectors
+        The input string array (input sentence split by ' ')
+        The output string array
+    """
     if test_source_text is None:
         test_source_text = raw_data_en[np.random.choice(len(raw_data_en))]
     print(test_source_text)
@@ -411,6 +531,16 @@ def predict(test_source_text=None):
 
 @tf.function
 def train_step(source_seq, target_seq_in, target_seq_out):
+    """ Execute one training step (forward pass + backward pass)
+
+    Args:
+        source_seq: source sequences
+        target_seq_in: input target sequences (<start> + ...)
+        target_seq_out: output target sequences (... + <end>)
+    
+    Returns:
+        The loss value of the current pass
+    """
     with tf.GradientTape() as tape:
         encoder_mask = 1 - tf.cast(tf.equal(source_seq, 0), dtype=tf.float32)
         # encoder_mask has shape (batch_size, source_len)
