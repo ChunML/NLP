@@ -14,9 +14,10 @@ from test import predict
 parser = argparse.ArgumentParser()
 parser.add_argument('--max_length', default=30, type=int,
                     help='maximum length of training sentences')
-parser.add_argument('--model_size', default=128, type=int,
+parser.add_argument('--model_size', default=256, type=int,
                     help='model size of the Transformer')
-parser.add_argument('--h', default=4, help='number of attention heads')
+parser.add_argument('--h', default=4, type=int,
+                    help='number of attention heads')
 parser.add_argument('--num_layers', default=3,
                     type=int, help='number of layers')
 parser.add_argument('--num_examples', default=-1, type=int,
