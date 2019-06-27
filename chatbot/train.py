@@ -16,12 +16,8 @@ parser.add_argument('--max_length', default=30, type=int,
                     help='maximum length of training sentences')
 parser.add_argument('--model_size', default=256, type=int,
                     help='model size of the Transformer')
-<<<<<<< HEAD
-parser.add_argument('--h', default=8, help='number of attention heads')
-=======
 parser.add_argument('--h', default=4, type=int,
                     help='number of attention heads')
->>>>>>> 246e05d709cd5a47e9a9383b5c16ec311fedf15f
 parser.add_argument('--num_layers', default=3,
                     type=int, help='number of layers')
 parser.add_argument('--num_examples', default=-1, type=int,
