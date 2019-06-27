@@ -9,17 +9,14 @@ from model import create_transformer
 from training_utils import train_step, create_optimizer
 from data import create_dataset
 from test import predict
+import yaml
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--max_length', default=30, type=int,
                     help='maximum length of training sentences')
-parser.add_argument('--model_size', default=256, type=int,
-                    help='model size of the Transformer')
-parser.add_argument('--h', default=4, type=int,
-                    help='number of attention heads')
-parser.add_argument('--num_layers', default=3,
-                    type=int, help='number of layers')
+parser.add_argument('--config', default='./config/base.yml',
+                    help='config file for Transformer')
 parser.add_argument('--num_examples', default=-1, type=int,
                     help='number of training pairs')
 parser.add_argument('--batch_size', default=32, type=int, help='batch size')
@@ -31,14 +28,17 @@ args = parser.parse_args()
 
 
 if __name__ == '__main__':
+    with open(args.config, 'r') as f:
+        config = yaml.load(f, yaml.SafeLoader)
+
     dataset, info = create_dataset(
         args.max_length, args.batch_size, args.num_examples)
 
     encoder, decoder = create_transformer(
-        info['vocab_size'], args.model_size,
-        info['max_length'], args.num_layers, args.h)
+        info['vocab_size'], config['MODEL_SIZE'],
+        info['max_length'], config['NUM_LAYERS'], config['H'])
 
-    optimizer = create_optimizer(args.model_size)
+    optimizer = create_optimizer(config['MODEL_SIZE'])
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     encoder_ckpt_path = os.path.join(
