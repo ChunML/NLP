@@ -14,9 +14,9 @@ from test import predict
 parser = argparse.ArgumentParser()
 parser.add_argument('--max_length', default=30, type=int,
                     help='maximum length of training sentences')
-parser.add_argument('--model_size', default=128, type=int,
+parser.add_argument('--model_size', default=256, type=int,
                     help='model size of the Transformer')
-parser.add_argument('--h', default=4, help='number of attention heads')
+parser.add_argument('--h', default=8, help='number of attention heads')
 parser.add_argument('--num_layers', default=3,
                     type=int, help='number of layers')
 parser.add_argument('--num_examples', default=-1, type=int,
@@ -24,6 +24,8 @@ parser.add_argument('--num_examples', default=-1, type=int,
 parser.add_argument('--batch_size', default=32, type=int, help='batch size')
 parser.add_argument('--num_epochs', default=100, type=int,
                     help='number of training epochs')
+parser.add_argument('--checkpoint_dir', default='checkpoints',
+                    help='directory to store checkpoints')
 args = parser.parse_args()
 
 
@@ -36,6 +38,12 @@ if __name__ == '__main__':
         info['max_length'], args.num_layers, args.h)
 
     optimizer = create_optimizer(args.model_size)
+
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    encoder_ckpt_path = os.path.join(
+        args.checkpoint_dir, 'encoder_epoch_{}.h5')
+    decoder_ckpt_path = os.path.join(
+        args.checkpoint_dir, 'decoder_epoch_{}.h5')
 
     starttime = time.time()
     for e in range(args.num_epochs):
@@ -50,8 +58,8 @@ if __name__ == '__main__':
                     e + 1, i + 1, avg_loss, time.time() - starttime))
                 starttime = time.time()
 
-        encoder.save_weights('./checkpoints/encoder_epoch_{}'.format(e + 1))
-        decoder.save_weights('./checkpoints/decoder_epoch_{}'.format(e + 1))
+        encoder.save_weights(encoder_ckpt_path.format(e + 1))
+        decoder.save_weights(decoder_ckpt_path.format(e + 1))
 
         try:
             predict(encoder, decoder, info['tokenizer'],
