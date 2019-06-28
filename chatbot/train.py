@@ -10,6 +10,7 @@ from training_utils import train_step, create_optimizer
 from data import create_dataset
 from test import predict
 import yaml
+import glob
 
 
 parser = argparse.ArgumentParser()
@@ -45,6 +46,15 @@ if __name__ == '__main__':
         args.checkpoint_dir, 'encoder_epoch_{}.h5')
     decoder_ckpt_path = os.path.join(
         args.checkpoint_dir, 'decoder_epoch_{}.h5')
+
+    encoder_ckpts = glob.glob(os.path.join(args.checkpoint_dir, 'encoder*.h5'))
+    decoder_ckpts = glob.glob(os.path.join(args.checkpoint_dir, 'decoder*.h5'))
+    
+    if len(encoder_ckpts) > 0 and len(decoder_ckpts) > 0:
+        latest_encoder_ckpt = max(encoder_ckpts, key=os.path.getctime)
+        encoder.load_weights(latest_encoder_ckpt)
+        latest_decoder_ckpt = max(decoder_ckpts, key=os.path.getctime)
+        decoder.load_weights(latest_decoder_ckpt)
 
     starttime = time.time()
     for e in range(args.num_epochs):
