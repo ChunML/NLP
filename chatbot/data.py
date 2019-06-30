@@ -57,6 +57,7 @@ def create_dataset(max_length, batch_size, num_examples=-1):
     info = {
         'max_length': max_length,
         'vocab_size': vocab_size,
+        'data_size': len(raw_input_lines),
         'tokenizer': tokenizer
     }
 

@@ -67,7 +67,7 @@ if __name__ == '__main__':
 
     # TODO: Is there any smarter way to get the vocab size?
     _, info = create_dataset(
-        args.max_length, 1, 100)
+        args.max_length, 1, -1)
 
     encoder, decoder = create_transformer(
         info['vocab_size'], config['MODEL_SIZE'],

@@ -21,7 +21,7 @@ class WarmupThenDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule
         warmup_steps: number of warmup steps at the beginning
     """
 
-    def __init__(self, model_size, warmup_steps=4000, trained_steps=43000):
+    def __init__(self, model_size, warmup_steps=4000, trained_steps=0):
         super(WarmupThenDecaySchedule, self).__init__()
         
         self.trained_steps = trained_steps
@@ -34,11 +34,11 @@ class WarmupThenDecaySchedule(tf.keras.optimizers.schedules.LearningRateSchedule
         step_term = tf.math.rsqrt(step + self.trained_steps)
         warmup_term = step * (self.warmup_steps ** -1.5)
 
-        return 0.05 * tf.math.minimum(step_term, warmup_term)
+        return 0.005 * tf.math.minimum(step_term, warmup_term)
 
 
-def create_optimizer(model_size):
-    lr = WarmupThenDecaySchedule(model_size)
+def create_optimizer(model_size, trained_steps):
+    lr = WarmupThenDecaySchedule(model_size, trained_steps=trained_steps)
     optimizer = tf.keras.optimizers.Adam(lr,
                                          beta_1=0.9,
                                          beta_2=0.98,

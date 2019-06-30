@@ -20,7 +20,6 @@ parser.add_argument('--config', default='./config/base.yml',
                     help='config file for Transformer')
 parser.add_argument('--num_examples', default=-1, type=int,
                     help='number of training pairs')
-parser.add_argument('--batch_size', default=32, type=int, help='batch size')
 parser.add_argument('--num_epochs', default=100, type=int,
                     help='number of training epochs')
 parser.add_argument('--checkpoint_dir', default='checkpoints',
@@ -33,13 +32,12 @@ if __name__ == '__main__':
         config = yaml.load(f, yaml.SafeLoader)
 
     dataset, info = create_dataset(
-        args.max_length, args.batch_size, args.num_examples)
+        args.max_length, config['BATCH_SIZE'], args.num_examples)
 
     encoder, decoder = create_transformer(
         info['vocab_size'], config['MODEL_SIZE'],
         info['max_length'], config['NUM_LAYERS'], config['H'])
 
-    optimizer = create_optimizer(config['MODEL_SIZE'])
 
     os.makedirs(args.checkpoint_dir, exist_ok=True)
     encoder_ckpt_path = os.path.join(
@@ -49,15 +47,21 @@ if __name__ == '__main__':
 
     encoder_ckpts = glob.glob(os.path.join(args.checkpoint_dir, 'encoder*.h5'))
     decoder_ckpts = glob.glob(os.path.join(args.checkpoint_dir, 'decoder*.h5'))
+    epoch_start = 0
     
     if len(encoder_ckpts) > 0 and len(decoder_ckpts) > 0:
         latest_encoder_ckpt = max(encoder_ckpts, key=os.path.getctime)
         encoder.load_weights(latest_encoder_ckpt)
         latest_decoder_ckpt = max(decoder_ckpts, key=os.path.getctime)
         decoder.load_weights(latest_decoder_ckpt)
+        epoch_start = int(latest_encoder_ckpt[latest_encoder_ckpt.rfind('_')+1:-3])
 
+    num_steps = info['data_size'] // config['BATCH_SIZE']
+    print('num steps', num_steps)
+    optimizer = create_optimizer(config['MODEL_SIZE'], trained_steps=epoch_start*num_steps)
+    
     starttime = time.time()
-    for e in range(args.num_epochs):
+    for e in range(epoch_start, args.num_epochs):
         avg_loss = 0.0
         for i, (source_seq, target_seq_in, target_seq_out) in enumerate(dataset.take(-1)):
             loss = train_step(source_seq, target_seq_in, target_seq_out,
