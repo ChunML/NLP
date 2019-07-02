@@ -20,6 +20,8 @@ parser.add_argument('--config', default='./config/base.yml',
                     help='config file for Transformer')
 parser.add_argument('--num_examples', default=-1, type=int,
                     help='number of training pairs')
+parser.add_argument('--initial_lr', default=5e-3, type=float,
+                    help='initial learning rate')
 parser.add_argument('--num_epochs', default=100, type=int,
                     help='number of training epochs')
 parser.add_argument('--checkpoint_dir', default='checkpoints',
@@ -58,7 +60,8 @@ if __name__ == '__main__':
 
     num_steps = info['data_size'] // config['BATCH_SIZE']
     print('num steps', num_steps)
-    optimizer = create_optimizer(config['MODEL_SIZE'], trained_steps=epoch_start*num_steps)
+    optimizer = create_optimizer(
+        config['MODEL_SIZE'], initial_lr=args.initial_lr, trained_steps=epoch_start*num_steps)
     
     starttime = time.time()
     for e in range(epoch_start, args.num_epochs):
