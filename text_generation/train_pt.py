@@ -107,7 +107,7 @@ def predict(device, net, words, n_vocab, vocab_to_int, int_to_vocab, top_k=5):
         choice = np.random.choice(choices[0])
         words.append(int_to_vocab[choice])
 
-    print(' '.join(words).encode('utf-8'))
+    print(' '.join(words))
 
 
 def main():
